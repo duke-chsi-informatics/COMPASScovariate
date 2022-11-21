@@ -47,7 +47,8 @@ Imports:
     BiocStyle,
     rmarkdown,
     foreach,
-    coda
+    coda,
+    raster
 Suggests:
     flowWorkspace (>= 3.33.1),
     flowCore,
