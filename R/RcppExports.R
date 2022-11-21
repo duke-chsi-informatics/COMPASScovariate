@@ -9,3 +9,7 @@ CellCounts_character <- function(data, combinations) {
     .Call(`_COMPASS_CellCounts_character`, data, combinations)
 }
 
+updategammak_cov <- function(n_s, n_u, gammat, I, K, SS, alphau, alphas, alpha, mk, Istar, mKstar, pp, pb1, pb2, indi, WK1, WK0) {
+    .Call(`_COMPASS_updategammak_cov`, n_s, n_u, gammat, I, K, SS, alphau, alphas, alpha, mk, Istar, mKstar, pp, pb1, pb2, indi, WK1, WK0)
+}
+
