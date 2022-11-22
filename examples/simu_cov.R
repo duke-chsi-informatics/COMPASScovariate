@@ -2,6 +2,8 @@
 source("~/COMPASScovariate/R/COMPASS-covariate.R")
 source("~/COMPASScovariate/R/updatebeta.R")
 
+library(COMPASS)
+
 I <- 200 ## sample size i.e., #subjects; I = 30
 K <- 10 ## number of cell categories: K = 16
 K1 = K-1
