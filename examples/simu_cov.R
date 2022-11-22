@@ -1,6 +1,6 @@
 #Source for now but will want to call using COMPASS.R eventually
-source("~/COMPASScovariate/R/COMPASS-covariate.R")
-source("~/COMPASScovariate/R/updatebeta.R")
+source("~/project_repos/COMPASScovariate/R/COMPASS-covariate.R")
+source("~/project_repos/COMPASScovariate/R/updatebeta.R")
 
 I <- 200 ## sample size i.e., #subjects; I = 30
 K <- 10 ## number of cell categories: K = 16
