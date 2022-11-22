@@ -64,7 +64,7 @@ X1 = cbind(1,X)
 
 
 
-fit_cov = .COMPASS.covariate(n_s, n_u, 100000, 10, X)
+fit_cov = .COMPASS.covariate(n_s, n_u, 1000, 10, X)
 for(tt in 2:N){
   res4 = updatebeta(gamma, X1, nu, u, lambda2, tau2, W, K1,p1, sig2k)
   W = res4$W
