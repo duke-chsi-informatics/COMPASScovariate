@@ -101,7 +101,7 @@
     WW = -X1%*%t(beta[,,tt-1])#IxK1 # Xbeta
     logWK1 = -log(1+exp(WW)) #log(pr(gamma_ik) = 1)
     logWK0 = WW+logWK1
-    res1 <- updategammak_cov(n_s = n_s,n_u=n_u,gammat = gamma[,,tt-1],I=I,K=K,SS = SS,alphau = alpha_u[tt,],alphas = alpha_s[tt-1,],alpha=1,mk=mk,Istar = Istar,
+    res1 <- .Call('C_COMPASS_updategammak_cov', n_s = n_s,n_u=n_u,gammat = gamma[,,tt-1],I=I,K=K,SS = SS,alphau = alpha_u[tt,],alphas = alpha_s[tt-1,],alpha=1,mk=mk,Istar = Istar,
                               mKstar = mKstar,pp=pp, pb1 = pb1, pb2 = pb2, indi=indi, WK1 = logWK1,
                              WK0 = logWK0)
     gamma[,,tt] = res1$gamma_tt;
@@ -174,7 +174,7 @@
       WW = -X1%*%t(beta[,,tt-1])
       logWK1 = -log(1+exp(WW)) #IxK1 # Xbeta
       logWK0 = WW+logWK1
-      res1 <- updategammak_cov(n_s = n_s,n_u=n_u,gammat = gamma[,,tt-1],I=I,K=K,SS = SS,alphau = alpha_u[tt,],alphas = alpha_s[tt-1,],alpha=1,mk=mk,Istar = Istar,
+      res1 <- .Call('C_COMPASS_updategammak_cov', n_s = n_s,n_u=n_u,gammat = gamma[,,tt-1],I=I,K=K,SS = SS,alphau = alpha_u[tt,],alphas = alpha_s[tt-1,],alpha=1,mk=mk,Istar = Istar,
                                mKstar = mKstar,pp=pp, pb1 = pb1, pb2 = pb2, indi=indi, WK1 = logWK1,
                                WK0 = logWK0)
       gamma[,,tt] = res1$gamma_tt;
