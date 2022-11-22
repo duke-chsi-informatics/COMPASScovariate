@@ -14,6 +14,24 @@ SEXP melt_matrix(SEXP x);
 SEXP transpose_list(SEXP x);
 SEXP _COMPASS_CellCounts_character(SEXP dataSEXP, SEXP combinationsSEXP);
 SEXP _COMPASS_CellCounts(SEXP xSEXP, SEXP combosSEXP);
+SEXP _COMPASS_updategammak_cov(SEXP n_s,
+                      SEXP n_u,
+                      SEXP gammat,
+                      SEXP I,
+                      SEXP K,
+                      SEXP SS,
+                      SEXP alphau,
+                      SEXP alphas,
+                      SEXP alpha,
+                      SEXP mk,
+                      SEXP Istar,
+                      SEXP mKstar,
+                      SEXP pp,
+                      SEXP pb1,
+                      SEXP pb2,
+                      SEXP indi,
+                      SEXP WK1,
+                      SEXP WK0);
 SEXP samplePuPs(SEXP alphau,
                 SEXP alphas,
                 SEXP gammat,
@@ -88,6 +106,7 @@ R_CallMethodDef callMethods[] = {
     {"C_updatealphas_Exp_MH", (DL_FUNC) & updatealphas_Exp_MH, 9},
     {"C_updatealphau_noPu_Exp", (DL_FUNC) & updatealphau_noPu_Exp, 9},
     {"C_updatealphau_noPu_Exp_MH", (DL_FUNC) & updatealphau_noPu_Exp_MH, 8},
+    {"C_COMPASS_updategammak_cov", (DL_FUNC) & _COMPASS_updategammak_cov, 18},
     {"C_updategammak_noPu", (DL_FUNC) & updategammak_noPu, 16},
     {NULL, NULL, 0}};
 
