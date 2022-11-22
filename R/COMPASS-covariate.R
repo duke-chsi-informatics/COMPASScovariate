@@ -61,8 +61,8 @@
   varp_u = array(sqrt(10),dim=c(K,1));
 
   pp = array(0.65, dim = c(I, 1))
-  pb1 <- raster::clamp(1.5 / median(indi[, K]), 0, 0.9)
-  pb2 <- raster::clamp(5.0 / median(indi[, K]), 0, 0.9)
+  pb1 <- clamp(1.5 / median(indi[, K]), 0, 0.9)
+  pb2 <- clamp(5.0 / median(indi[, K]), 0, 0.9)
   lambda_s = rep(0, K);
   lambda_s[1:K1] = (10 ^ -2) * max(N_s, N_u)
   lambda_s[K] = max(N_s, N_u) - sum(lambda_s[1:K1])
