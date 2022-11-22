@@ -1,18 +1,18 @@
 .COMPASS.covariate <- function(n_s, n_u, iterations, replications, X,
                               verbose=TRUE, ...) {
-  
+
   vmessage <- function(...)
     if (verbose) message(...) else invisible(NULL)
-  
+
   ## Initial parameters
   vmessage("Initializing parameters...")
   N <- iterations ## The number of iterations to run the model
   ttt <- 2000 ## The step size in mode search (fixed)
   SS <- 1L
-  
+
   N_s <- rowSums(n_s)
   N_u <- rowSums(n_u)
-  
+
   I <- nrow(n_s)
   K <- ncol(n_u)
   K1 <- K - 1L
@@ -39,41 +39,41 @@
   }
   indi[, K] <- rowSums(indi[, 1:K1, drop = FALSE])
   indi <- matrix(as.integer(indi), nrow = I)
-  
-  
+
+
   #############################################
   mk = array(as.integer(0), dim = c(1,K1));
   Istar = 0;
   mKstar = 0;
-  
+
   gamma =array(as.integer(0), dim=c(I,K,N));
-  
+
   alpha_u = array(0, dim=c(N,K));
   alpha_s = array(0, dim=c(N,K));
-  
+
   varp_s1 = array(sqrt(5),dim=c(K,1)); # sqrt(var)
   varp_s2 = array(sqrt(15),dim=c(K,1)); # sqrt(var)
   varp_s2[K] = sqrt(25);
   varp_s1[K] = sqrt(15);
-  
+
   pvar_s = array(0.8,dim=c(K,1));
   pvar_s[K] = 0.6;
   varp_u = array(sqrt(10),dim=c(K,1));
-  
+
   pp = array(0.65, dim = c(I, 1))
-  pb1 <- clamp(1.5 / median(indi[, K]), 0, 0.9)
-  pb2 <- clamp(5.0 / median(indi[, K]), 0, 0.9)
-  lambda_s = rep(0, K);  
+  pb1 <- raster::clamp(1.5 / median(indi[, K]), 0, 0.9)
+  pb2 <- raster::clamp(5.0 / median(indi[, K]), 0, 0.9)
+  lambda_s = rep(0, K);
   lambda_s[1:K1] = (10 ^ -2) * max(N_s, N_u)
   lambda_s[K] = max(N_s, N_u) - sum(lambda_s[1:K1])
   lambda_u = lambda_s
-  
-  alpha_u[1, 1:(K - 1)] = 10 #initializaion 
+
+  alpha_u[1, 1:(K - 1)] = 10 #initializaion
   alpha_u[1, K] = 150
-  
-  alpha_s[1, 1:(K - 1)] = 10 #initialization 
+
+  alpha_s[1, 1:(K - 1)] = 10 #initialization
   alpha_s[1, K] = 100
-  
+
   #### related to X
   beta =  array(0, dim=c(K1,p1, N)) #K-1 subsets, p features + 1 intercept
   nu =  invgamma::rinvgamma(p, shape = 0.5, rate = 1)
@@ -207,7 +207,7 @@
     A_alphau = array(as.integer(0), dim=c(K,N));
     A_alphas = array(as.integer(0), dim=c(K,N));
   }
-  
+
   ######################################
   Nburn=0;
   Mgamma = mat.or.vec(I,K);
@@ -216,10 +216,10 @@
     Mgamma = Mgamma + gamma[,,ttt]; #thining
   }
   Mgamma = Mgamma/(N-Nburn);
-  
+
   vmessage("Done!")
-  
-  
+
+
   ## set names on the output
   output <- list(
     alpha_s=alpha_s,
@@ -232,7 +232,7 @@
     A_gamma=rowMeans(A_gm),
     model="covariate"
   )
-  
+
   return(output)
-  
+
 }
