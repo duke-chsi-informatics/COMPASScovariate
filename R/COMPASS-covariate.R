@@ -86,16 +86,16 @@
   A_gm = array(as.integer(0), dim=c(I,N));
   A_alphau = array(as.integer(0), dim=c(K,N));
   A_alphas = array(as.integer(0), dim=c(K,N));
-  
+
   vmessage("Computing initial parameter estimates...")
   for (tt in 2:N) {
-    
+
     if (tt %% 1000 == 0) vmessage("Iteration ", tt, " of ", iterations, ".")
-    
+
      # update alphau
-     res2 <- updatealphau_noPu_Exp(alphaut = alpha_u[tt-1,],n_s = n_s,n_u=n_u, I=I, K=K, lambda_u = lambda_u, var_p = varp_u, ttt = ttt,gammat =gamma[,,tt-1])
+     res2 <- .Call('C_updatealphau_noPu_Exp', alphaut = alpha_u[tt-1,],n_s = n_s,n_u=n_u, I=I, K=K, lambda_u = lambda_u, var_p = varp_u, ttt = ttt,gammat =gamma[,,tt-1])
      alpha_u[tt,] = res2$alphau_tt;
-     A_alphau[,tt] = res2$Aalphau; 
+     A_alphau[,tt] = res2$Aalphau;
 
     #update gamma_covariates
     WW = -X1%*%t(beta[,,tt-1])#IxK1 # Xbeta
@@ -109,9 +109,9 @@
     Istar = res1$xIstar;
     mk = res1$xmk;
     mKstar = res1$mKstar;
-    
+
     #update alphas
-    res3 <- updatealphas_Exp(alphast = alpha_s[tt-1,], n_s = n_s,  K=K, I=I, lambda_s = lambda_s, gammat =gamma[,,tt], var_1 = varp_s1,var_2 = varp_s2,p_var = pvar_s,ttt = ttt)
+    res3 <- .Call('C_updatealphas_Exp', alphast = alpha_s[tt-1,], n_s = n_s,  K=K, I=I, lambda_s = lambda_s, gammat =gamma[,,tt], var_1 = varp_s1,var_2 = varp_s2,p_var = pvar_s,ttt = ttt)
     alpha_s[tt,] = res3$alphas_tt;
     A_alphas[,tt] = res3$Aalphas;
 
@@ -159,14 +159,14 @@
   A_gm = array(as.integer(0), dim=c(I,N));
   A_alphau = array(as.integer(0), dim=c(K,N));
   A_alphas = array(as.integer(0), dim=c(K,N));
-  
+
   sNN=replications ## number of 'replications' -- should be user defined
   vmessage("Fitting model with ", sNN, " replications.")
   for (stt in 1:sNN) {
     vmessage("Running replication ", stt, " of ", sNN, "...")
     for (tt in 2:N) {
       # update alphau
-      res2 <- updatealphau_noPu_Exp(alphaut = alpha_u[tt-1,],n_s = n_s,n_u=n_u, I=I, K=K, lambda_u = lambda_u, var_p = varp_u, ttt = ttt,gammat =gamma[,,tt-1])
+      res2 <- .Call('C_updatealphau_noPu_Exp', alphaut = alpha_u[tt-1,],n_s = n_s,n_u=n_u, I=I, K=K, lambda_u = lambda_u, var_p = varp_u, ttt = ttt,gammat =gamma[,,tt-1])
       alpha_u[tt,] = res2$alphau_tt;
       A_alphau[,tt] = res2$Aalphau;
 
@@ -182,13 +182,13 @@
       Istar = res1$xIstar;
       mk = res1$xmk;
       mKstar = res1$mKstar;
-      
+
       # update alphas
-      res3 <- updatealphas_Exp(alphast = alpha_s[tt-1,], n_s = n_s,  K=K, I=I, lambda_s = lambda_s, gammat =gamma[,,tt], var_1 = varp_s1,var_2 = varp_s2,p_var = pvar_s,ttt = ttt)
-       
+      res3 <- .Call('C_updatealphas_Exp', alphast = alpha_s[tt-1,], n_s = n_s,  K=K, I=I, lambda_s = lambda_s, gammat =gamma[,,tt], var_1 = varp_s1,var_2 = varp_s2,p_var = pvar_s,ttt = ttt)
+
       alpha_s[tt,] = res3$alphas_tt;
       A_alphas[,tt] = res3$Aalphas;
-      
+
       # update beta
       res4 = updatebeta(gamma[,-K,tt], X1, nu, u, lambda2, tau2, W, K1,p1, sig2k)
       W = res4$W
