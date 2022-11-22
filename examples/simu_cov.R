@@ -1,3 +1,7 @@
+#Source for now but will want to call using COMPASS.R eventually
+source("~/COMPASScovariate/R/COMPASS-covariate.R")
+source("~/COMPASScovariate/R/updatebeta.R")
+
 I <- 200 ## sample size i.e., #subjects; I = 30
 K <- 10 ## number of cell categories: K = 16
 K1 = K-1
@@ -47,7 +51,7 @@ n_s[,K] = Ns - rowSums(n_s)
 
 N = 10000
 K1 <- K - 1L
-p1 = p + 1L # 
+p1 = p + 1L #
 beta =  array(0, dim=c(K1,p1, N)) #K-1 subsets, p features + 1 intercept
 nu =  invgamma::rinvgamma(p, shape = 0.5, rate = 1)
 u = invgamma::rinvgamma(K1, shape = 0.5, rate = 1)
@@ -59,7 +63,7 @@ X1 = cbind(1,X)
 
 
 
-fit_cov = .COMPASS.covariate(n_s, n_u, 100000, 10, X) 
+fit_cov = .COMPASS.covariate(n_s, n_u, 100000, 10, X)
 for(tt in 2:N){
   res4 = updatebeta(gamma, X1, nu, u, lambda2, tau2, W, K1,p1, sig2k)
   W = res4$W
