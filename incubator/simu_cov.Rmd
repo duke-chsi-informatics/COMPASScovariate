@@ -16,6 +16,34 @@ source("~/project_repos/COMPASScovariate/R/utils.R")
 library(foreach); library(doParallel)
 ```
 
+## Notes
+
+Alternative sim method (prioritize this one):
+
+1. Generate X cov
+2. Specify true betas (non-zero simulated from Normal)
+3. Run logistic regression to compute p-hat
+4. Using p-hat, generate Gamma matrix via rbinom()
+5. Generate pu, which is props for unstim
+6. Generate counts via multinomial
+7. Conditioned on gamma and pu, generate ps
+8. Generate ns (counts) from ps (prob vector)
+
+
+Using real data (COMPASS vignette):
+
+1. Run COMPASS on real data
+2. Get Gamma matrix
+3. Get ns and nu (counts)
+4. Generate X 
+5. Run logistic regression (glmnet with lasso) between gamma and X. Estimated beta will be considered "true" beta. 
+
+Note on iterations:
+
+Keep only the last X iterations and use the first ones to warm up chains.
+
+## Initial Simulation Method by Lynn
+
 Generate combinations of simulation parameters
 ```{r}
 sim.pars <- expand.grid(I = c(200, 30),
@@ -65,6 +93,8 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS")) %dopar% 
   n_u[,K] = Nu - rowSums(n_u)
   ps_true = pu_true
   
+  #If gamma is 0, the pu = ps
+  #
   for(i in 1:I){
     l1 = which(gamma[i,1:K1]==1)
     l0 = which(gamma[i,1:K1]==0)
@@ -73,10 +103,12 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS")) %dopar% 
   
   n_s = array(0, dim = c(I, K))
   Ns = ceiling(rnorm(I,30000, 10))
+  #Generating counts using true proportions
   for(i in 1:I){
     n_s[i,1:K1] = rmultinom(1, 6000, ps_true[i,])
   }
   n_s[,K] = Ns - rowSums(n_s)
+  
   
   N = 10000
   K1 <- K - 1L
