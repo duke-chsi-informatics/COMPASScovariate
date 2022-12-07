@@ -13,7 +13,9 @@ source("~/project_repos/COMPASScovariate/R/COMPASS-covariate.R")
 source("~/project_repos/COMPASScovariate/R/updatebeta.R")
 source("~/project_repos/COMPASScovariate/R/utils.R")
 
-library(foreach); library(doParallel)
+library(foreach); library(doParallel); library(HMP); library(MultiRNG); library(MCMCpack)
+
+# install.packages("MultiRNG")
 ```
 
 ## Notes
@@ -41,6 +43,363 @@ Using real data (COMPASS vignette):
 Note on iterations:
 
 Keep only the last X iterations and use the first ones to warm up chains.
+
+### Additional Complexities
+
+  1. Smaller difference in concentration parameters between stim and unstim
+  2. Different number of total events and event subsets for stim and unstim samples
+
+
+## Simulation Method 1
+
+### Set Fixed Parameters
+```{r}
+set.seed(123)
+
+I <- 50 ## sample size i.e., #subjects; I = 30
+K <- 8 ## number of cell categories: K = 16
+K1 = K-1 ## number of cell categories minus one (last one is baseline)
+p <- 5 # number of covariates # larger p
+e.total.mu = 10000 #Mean total number of events per subject
+e.total.sd = 100   #SD of total number of events per subject
+e.subset.mu = 3000 #Mean number of events per subject that are not in the Kth category (all negative set)
+e.subset.sd = 50   #SD of number of events per subject that are not in the Kth category (all negative set)
+
+#Betas
+beta.mu = 0
+beta.sigma = 0.3
+int.mu = -3
+int.sd = 0.1
+
+### Pu and Ps
+#Concentration params drawn from lognormal
+pu.logmu = log(10)
+p.logsd = 0.01
+ps.logmu.diff = log(10)
+
+### COMPASScovariate
+iter = 40000
+rep = 2
+```
+
+Set true betas
+```{r}
+#Intercepts
+int.true = rnorm(n = K1,
+                 mean = int.mu,
+                 sd = int.sd
+                 )
+
+#Covariate betas
+beta.true = matrix(rnorm(n = K1*(p),
+                         mean = beta.mu, 
+                         sd = beta.sigma), 
+                   nrow = K1
+                  )
+```
+
+Variable selection -- if |true beta| < 0.5, then true beta = 0
+```{r}
+beta.true.selection = apply(beta.true, MARGIN = c(1,2), FUN = function(x) ifelse(abs(x) < 0.1, 0, x))
+```
+
+Bind intercept betas to other betas
+```{r}
+beta.true.final <- cbind(int.true, beta.true.selection)
+```
+
+
+Make covariates
+```{r}
+X <- cbind(
+      #First column is 1s for intercept
+      rep(1, I*1),
+      #Remainder are for covariates
+      matrix(rnorm(n = I*p), 
+            ncol = p, 
+            nrow = I
+      )
+)
+```
+
+
+Generate omega_ik -- probability that gamma_ik = 1
+
+  1. p covariates from subject i x betas for p coefficients for cluster k gives linear predictor for cluster k in subject i
+  2. Inverse-logit transform linear predictor to obtain prob that gamma = 1 (true diff between stim and unstim) for cluster k in subject i
+  
+```{r}
+#Empty matrix to hold omega
+omega <- matrix(NA,
+                nrow = I,
+                ncol = K1
+                )
+
+#Empty matrix to hold gamma
+gamma.m <- matrix(NA,
+                     nrow = I,
+                     ncol = K1
+                     )
+
+for (i in 1:I) {
+  for (k in 1:K1) {
+    #Generate linear predictor and prob via inverse link
+    omega[i,k] <- binomial()$linkinv(X[i, ] %*% beta.true.final[k,]) #p covariates from ith subject x betas for p coefficients for kth cluster gives linear predictor
+    
+    #Generate gamma as Bernoulli RV with probs from omega
+    gamma.m[i,k] <- rbinom(n = 1,
+                           size = 1,
+                           prob = omega[i,k]
+                           )
+  }
+}
+```
+
+
+### Counts
+
+Empty matrices for stim and unstim counts. **Note:** Create K columns with 0s, not K - 1
+```{r}
+n_u <- matrix(0,
+              nrow = I,
+              ncol = K)
+
+n_s <- matrix(0,
+              nrow = I,
+              ncol = K)
+```
+
+
+#### Unstimulated
+
+Generate unstimulated count values for each subject
+```{r}
+#Generate total counts
+Nu = ceiling(
+      rnorm(mean = e.total.mu, 
+            sd = e.total.sd,
+            n = I)
+)
+
+Nu.subset = ceiling(
+              rnorm(mean = e.subset.mu, 
+                    sd = e.subset.sd,
+                    n = I
+              ) 
+)
+```
+
+Loop over each sample and do two things:
+
+  1. Create a vector of length K - 1 (not K) of concentration parameters drawn from a lognormal distribution with an unstimulated-specific log-mean.
+  2. Using the vector of concentration parameters, draw a vector of counts of length K - 1 (not K) from a Dirichlet-Multinomial distribution and fill the first K - 1 columns of the ith row of n_u
+
+**Note:** Leave the last column as 0 for all negative cell subset
+
+```{r}
+concentration_u = matrix(NA,
+                         nrow = I,
+                         ncol = K1
+                  )
+
+for (i in 1:I) {
+  concentration_u[i,] = rlnorm(n = K1, 
+                 meanlog = (pu.logmu), 
+                 sdlog = p.logsd
+  )
+  #HMP version
+  # n_u[i,1:K1] = t(matrix(HMP::Dirichlet.multinomial(Nrs = Nu.subset[i], shape = concentration_u[i,])))
+  
+  #MultiRNG version
+  n_u[i,1:K1] = MultiRNG::draw.dirichlet.multinomial(N = Nu.subset[i],                    #Total counts
+                                                         no.row = 1,                      #Sample size
+                                                         d = length(concentration_u[i,]), #Number of categories (same as length of concentration vector)
+                                                         alpha = concentration_u[i,],     #Concentration vector
+                                                         beta = 1                         #Common shape parameter
+                                                              )
+}
+```
+
+Check rowsums
+```{r}
+identical(rowSums(n_u), Nu.subset)
+```
+
+Make the kth cluster be the remaining events for the sample
+```{r}
+n_u[,K] = Nu - rowSums(n_u)
+```
+
+Check rowsums
+```{r}
+identical(rowSums(n_u), Nu)
+```
+
+#### Stimulated
+
+Generate stimulated count values for each subject
+```{r}
+#Generate total counts
+Ns = ceiling(
+      rnorm(mean = e.total.mu, 
+            sd = e.total.sd,
+            n = I)
+)
+
+Ns.subset = ceiling(
+              rnorm(mean = e.subset.mu, 
+                    sd = e.subset.sd,
+                    n = I
+              ) 
+)
+```
+
+Loop over each sample and do two things:
+
+  1. Create a vector of length K - 1 (not K) of concentration parameters drawn from a lognormal distribution with an unstimulated-specific log-mean.
+  2. Using the vector of concentration parameters, draw a vector of counts of length K - 1 (not K) from a Dirichlet-Multinomial distribution and fill the first K - 1 columns of the ith row of n_u
+
+**Notes:** 
+
+  - Leave the last column as 0
+  - Concentration is shifted by ps.logmu.diff if gamma = 1
+
+```{r}
+concentration_s = matrix(NA,
+                         nrow = I,
+                         ncol = K1
+                  )
+
+for (i in 1:I) {
+  concentration_s[i, ] = rlnorm(n = K1, 
+                 meanlog = (pu.logmu + ps.logmu.diff * gamma.m[i, ]), 
+                 sdlog = p.logsd
+  )
+  #HMP version
+  # n_s[i,1:K1] = t(matrix(HMP::Dirichlet.multinomial(Nrs = Ns.subset[i], shape = concentration_s[i,])))
+  
+  #MultiRNG version
+  n_s[i,1:K1] = MultiRNG::draw.dirichlet.multinomial(N = Ns.subset[i],                #Total counts
+                                                     no.row = 1,                      #Sample size
+                                                     d = length(concentration_s[i,]), #Number of categories (same as length of concentration vector)
+                                                     alpha = concentration_s[i,],     #Concentration vector
+                                                     beta = 1                         #Common shape parameter
+                                                              )
+}
+
+```
+
+Check rowsums
+```{r}
+identical(rowSums(n_s), Ns.subset)
+```
+
+Make the kth cluster be the remaining events for the sample
+```{r}
+n_s[,K] = Ns - rowSums(n_s)
+```
+
+Check rowsums
+```{r}
+identical(rowSums(n_s), Ns)
+```
+
+### Run COMPASScovariate
+
+Create a version of X without an intercept column
+```{r}
+X.mod = X[,-1]
+```
+
+```{r}
+fit_cov = .COMPASS.covariate(n_s = n_s, 
+                             n_u = n_u,
+                             X = X.mod,
+                             iterations = iter, 
+                             replication = rep)
+```
+
+### Compare Estimates to True
+
+Create a custom function for calculating the mode
+```{r}
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+```
+
+#### Gamma
+
+```{r}
+(fit_cov$A_gamma)
+```
+
+
+```{r}
+fit_cov$mean_gamma[2,]
+```
+
+```{r}
+apply(fit_cov$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))[2,]
+```
+
+
+```{r}
+gamma.m[2,]
+```
+
+```{r}
+n_u[2,]
+n_s[2,]
+```
+
+
+#### Betas
+
+```{r}
+apply(fit_cov$beta, MARGIN = c(1,2), FUN = function(x) median(x))
+```
+
+```{r}
+beta.true.final
+```
+
+
+
+
+<!-- ### Recover Betas -->
+
+<!-- ```{r} -->
+<!-- N = iter*rep -->
+<!-- K1 <- K - 1L -->
+<!-- p1 = p + 1L # -->
+<!-- beta =  array(0, dim=c(K1,p1, N)) #K-1 subsets, p features + 1 intercept -->
+<!-- nu =  invgamma::rinvgamma(p, shape = 0.5, rate = 1) -->
+<!-- u = invgamma::rinvgamma(K1, shape = 0.5, rate = 1) -->
+<!-- lambda2 = invgamma::rinvgamma(p, shape = 0.5, rate = 1/nu) -->
+<!-- tau2 = invgamma::rinvgamma(K1, shape = 0.5, rate = 1/u) -->
+<!-- W =  matrix(sapply(1:(I*K1), function(x) pgdraw::pgdraw(1,0)), nrow = I) -->
+<!-- sig2k = rep(10, K1) # var for normal prior of intercept -->
+<!-- X1 = X -->
+<!-- gamma = gamma.m #We called final gamma matrix gamma.m -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- for(tt in 2:N){ -->
+<!--   res4 = updatebeta(gamma, X1, nu, u, lambda2, tau2, W, K1,p1, sig2k) -->
+<!--   W = res4$W -->
+<!--   u = res4$u -->
+<!--   nu = res4$nu -->
+<!--   tau2 = res4$tau2 -->
+<!--   lambda2 = res4$lambda2 -->
+<!--   beta[,,tt] = res4$beta -->
+<!-- } -->
+<!-- ``` -->
+
+
+
+
 
 ## Initial Simulation Method by Lynn
 
