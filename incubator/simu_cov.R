@@ -3,8 +3,8 @@ source("~/project_repos/COMPASScovariate/R/COMPASS-covariate.R")
 source("~/project_repos/COMPASScovariate/R/updatebeta.R")
 source("~/project_repos/COMPASScovariate/R/utils.R")
 
-I <- 200 ## sample size i.e., #subjects; I = 30
-K <- 10 ## number of cell categories: K = 16
+I <- 2 ## sample size i.e., #subjects; I = 30
+K <- 8 ## number of cell categories: K = 16
 K1 = K-1
 p <- 5 # number of covariates # larger p
 
@@ -28,19 +28,22 @@ for(k in 1:K1){
 gamma[,K] = rbinom(I,1,0.5)
 gamma_true = gamma
 
-pu_true = MCMCpack::rdirichlet(I, rep(10, K1))
-n_u = array(0, dim = c(I, K))
-Nu = ceiling(rnorm(I,20000, 10))
+pu_true = MCMCpack::rdirichlet(I, rep(10, K1)) #True unstim cluster props with concentration = 10
+n_u = array(0, dim = c(I, K)) #Container for k unstim cluster counts with 0s
+Nu = ceiling(rnorm(I,20000, 10)) #Make the total events per sample 20,000 on average
+#For each sample, generate counts in each k1 clusters, leaving the kth cluster as 0, with event count = 5000
 for(i in 1:I){
   n_u[i,1:K1] = rmultinom(1, 5000, pu_true[i,])
 }
+#Make the kth cluster be the remaining events for the sample
 n_u[,K] = Nu - rowSums(n_u)
 ps_true = pu_true
 
+#Loop over samples
 for(i in 1:I){
   l1 = which(gamma[i,1:K1]==1)
   l0 = which(gamma[i,1:K1]==0)
-  ps_true[i,l1] = MCMCpack::rdirichlet(1, rep(20, length(l1)))*sum(pu_true[i,l1])
+  ps_true[i,l1] = MCMCpack::rdirichlet(1, rep(20, length(l1)))*sum(pu_true[i,l1]) #For the clusters where gamma = 1, then change the prop by increasing concentration to 20, and normalize these to maintain 1
 }
 
 n_s = array(0, dim = c(I, K))
