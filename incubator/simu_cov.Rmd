@@ -52,6 +52,23 @@ Keep only the last X iterations and use the first ones to warm up chains.
 
 ## Simulation Method 1
 
+**Approach**
+
+  1. Matrix of true betas for each k-1 subset for each covariate p ~ Normal(beta.mu, beta.sigma)
+    1. Model selection where any beta where |beta| < beta.selection.cutoff -> 0
+  2. Vector of true intercepts for each k-1 subset ~ Normal(int.mu, int.sd)
+    1. int.mu is negative to keep probability that gamma = 1 small to give a small number of stimulated subsets for simplicity
+  3. Matrix X (I x p) of covariates with first column of 1's for intercept
+  4. Omega (I x K1): For each sample, for each subset, generate linear predictor as linear combination of sample's covariate values X[i,] and subset-specific true betas beta.true.final[k,]
+  5. gamma.m (I x K1): For each sample, for each subset, map linear predictor to probability using inverse-logit function
+  6. Generate unstimulated and stimulated counts from a Dirichlet-Multinomial distribution where the concentration parameters are drawn from a lognormal distribution with same logmean and logsd values. 
+    1. For stimulated cluster-samples (where gamma = 1), shift the logmean by ps.logmu.diff to increase the concentration parameter by exp(ps.logmu.diff).
+    2. For each sample, number of stimulated and unstimulated counts ~ Normal(e.total.mu, e.total.sd). This is the total number of stim and unstim counts for each sample.
+    3. For both stimluated and unstimulated, use Dirichlet-Multinomial to draw subset of stimulated and unstimulated counts ~ Normal(e.subset.mu, e.subset.sd). This is the number of stim and unstim counts for the k-1 subsets.
+    4. Find the counts in the kth subset (corresponding to all negative cell subset) as the total number of counts minus the sum of the first k - 1 subsets
+      + This implies that the difference between stim and unstim for the kth subset is not a function of the betas
+  
+
 ### Set Fixed Parameters
 ```{r}
 set.seed(123)
@@ -70,6 +87,7 @@ beta.mu = 0
 beta.sigma = 0.3
 int.mu = -3
 int.sd = 0.1
+beta.selection.cutoff = 0.1
 
 ### Pu and Ps
 #Concentration params drawn from lognormal
@@ -100,7 +118,7 @@ beta.true = matrix(rnorm(n = K1*(p),
 
 Variable selection -- if |true beta| < 0.5, then true beta = 0
 ```{r}
-beta.true.selection = apply(beta.true, MARGIN = c(1,2), FUN = function(x) ifelse(abs(x) < 0.1, 0, x))
+beta.true.selection = apply(beta.true, MARGIN = c(1,2), FUN = function(x) ifelse(abs(x) < beta.selection.cutoff, 0, x))
 ```
 
 Bind intercept betas to other betas
