@@ -71,21 +71,21 @@ Keep only the last X iterations and use the first ones to warm up chains.
 
 ### Set Fixed Parameters
 ```{r}
-set.seed(123)
+set.seed(111)
 
-I <- 50 ## sample size i.e., #subjects; I = 30
+I <- 200 ## sample size i.e., #subjects; I = 30
 K <- 8 ## number of cell categories: K = 16
 K1 = K-1 ## number of cell categories minus one (last one is baseline)
 p <- 5 # number of covariates # larger p
 e.total.mu = 10000 #Mean total number of events per subject
-e.total.sd = 100   #SD of total number of events per subject
+e.total.sd = 10   #SD of total number of events per subject
 e.subset.mu = 3000 #Mean number of events per subject that are not in the Kth category (all negative set)
-e.subset.sd = 50   #SD of number of events per subject that are not in the Kth category (all negative set)
+e.subset.sd = 5   #SD of number of events per subject that are not in the Kth category (all negative set)
 
 #Betas
 beta.mu = 0
 beta.sigma = 0.3
-int.mu = -3
+int.mu = -2
 int.sd = 0.1
 beta.selection.cutoff = 0.1
 
@@ -93,7 +93,7 @@ beta.selection.cutoff = 0.1
 #Concentration params drawn from lognormal
 pu.logmu = log(10)
 p.logsd = 0.01
-ps.logmu.diff = log(10)
+ps.logmu.diff = log(5)
 
 ### COMPASScovariate
 iter = 40000
@@ -329,7 +329,7 @@ Create a version of X without an intercept column
 X.mod = X[,-1]
 ```
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 fit_cov = .COMPASS.covariate(n_s = n_s, 
                              n_u = n_u,
                              X = X.mod,
@@ -349,27 +349,23 @@ getmode <- function(v) {
 
 #### Gamma
 
+
 ```{r}
-(fit_cov$A_gamma)
+fit_cov$mean_gamma[1:2,]
+```
+
+```{r}
+apply(fit_cov$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))[1:2,]
 ```
 
 
 ```{r}
-fit_cov$mean_gamma[2,]
+gamma.m[1:2,]
 ```
 
 ```{r}
-apply(fit_cov$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))[2,]
-```
-
-
-```{r}
-gamma.m[2,]
-```
-
-```{r}
-n_u[2,]
-n_s[2,]
+n_u[1:2,]
+n_s[1:2,]
 ```
 
 
@@ -534,4 +530,3 @@ names(sim.out.list) <- apply(sim.pars, MARGIN = 1, FUN = function(x) {
 
 stopCluster(cl)
 ```
-
