@@ -2,7 +2,13 @@
 title: "COMPASScovariate Test Simulations"
 author: "Tyler Schappe"
 date: "2022-11-22"
-output: html_document
+output: 
+  html_document:
+    code_folding: hide
+  html_notebook:
+    code_folding: show
+    toc: true
+    toc_float: true
 ---
 
 ```{r setup, include=FALSE}
@@ -13,7 +19,7 @@ source("~/project_repos/COMPASScovariate/R/COMPASS-covariate.R")
 source("~/project_repos/COMPASScovariate/R/updatebeta.R")
 source("~/project_repos/COMPASScovariate/R/utils.R")
 
-library(foreach); library(doParallel); library(HMP); library(MultiRNG); library(MCMCpack)
+library(foreach); library(doParallel); library(HMP); library(MultiRNG); library(MCMCpack); library(devtools)
 
 # install.packages("MultiRNG")
 ```
