@@ -56,7 +56,7 @@ Keep only the last X iterations and use the first ones to warm up chains.
   2. Different number of total events and event subsets for stim and unstim samples
 
 
-## Simulation Method 1
+## Method 1
 
 **Approach**
 
@@ -76,6 +76,7 @@ Keep only the last X iterations and use the first ones to warm up chains.
   
 
 ### Set Fixed Parameters
+
 ```{r}
 set.seed(111)
 
@@ -336,7 +337,7 @@ X.mod = X[,-1]
 ```
 
 ```{r message=FALSE, warning=FALSE}
-fit_cov = .COMPASS.covariate(n_s = n_s, 
+sim1.fit = .COMPASS.covariate(n_s = n_s, 
                              n_u = n_u,
                              X = X.mod,
                              iterations = iter, 
@@ -354,7 +355,6 @@ getmode <- function(v) {
 ```
 
 #### Gamma
-
 
 ```{r}
 fit_cov$mean_gamma[1:2,]
@@ -385,3 +385,91 @@ apply(fit_cov$beta, MARGIN = c(1,2), FUN = function(x) median(x))
 beta.true.final
 ```
 
+##Method 3: Lynn's Original Method
+
+### True Regression Coefs
+
+```{r}
+X <- matrix(rnorm(I*p), ncol = p, nrow = I) # covariates
+mu_true = rnorm(K, 0, 1) # the true intercept
+alpha_true = matrix(rbinom(p*K1, 1, 0.7), nrow = K1) # variable selection indicators
+
+B_true = matrix(rnorm(K1*p, 0, 5), nrow = K1)
+Balpha = B_true*alpha_true # coefficients with zeros
+```
+
+### True Gamma Matrix
+
+```{r}
+gamma <- matrix(0, nrow = I, ncol =  K) ## 0/1 response
+
+#Loop over samples and create a gamma[i,k] via linear predictor from coefficients
+for(k in 1:K1){
+  z = mu_true[k] + X%*%(Balpha[k,]) # linear combination with a bias
+  pr = 1/(1+exp(-z))   # pass through an inv-logit function
+  gamma[,k] = unlist(lapply(pr, function(x) rbinom(1,1, x)))
+}
+
+gamma[,K] = rbinom(I,1,0.5) #Kth category has a 50/50 chance of being 1
+gamma_true = gamma
+```
+
+### True Counts
+
+```{r}
+pu_true = MCMCpack::rdirichlet(I, rep(10, K1)) #True unstim cluster props with concentration = 10
+n_u = array(0, dim = c(I, K)) #Container for k unstim cluster counts with 0s
+Nu = ceiling(rnorm(I,20000, 10)) #Make the total events per sample 20,000 on average
+#For each sample, generate counts in each k1 clusters, leaving the kth cluster as 0, with event count = 5000
+for(i in 1:I){
+  n_u[i,1:K1] = rmultinom(1, 5000, pu_true[i,])
+}
+#Make the kth cluster be the remaining events for the sample
+n_u[,K] = Nu - rowSums(n_u)
+ps_true = pu_true
+
+#Loop over samples
+for(i in 1:I){
+  l1 = which(gamma[i,1:K1]==1)
+  l0 = which(gamma[i,1:K1]==0)
+  ps_true[i,l1] = MCMCpack::rdirichlet(1, rep(20, length(l1)))*sum(pu_true[i,l1]) #For the clusters where gamma = 1, then change the prop by increasing concentration to 20, and normalize these to maintain 1
+}
+
+n_s = array(0, dim = c(I, K))
+Ns = ceiling(rnorm(I,30000, 10))
+for(i in 1:I){
+  n_s[i,1:K1] = rmultinom(1, 6000, ps_true[i,])
+}
+n_s[,K] = Ns - rowSums(n_s)
+```
+
+### Run COMPASScovariate
+
+```{r message=FALSE, warning=FALSE}
+sim2.fit = .COMPASS.covariate(n_s = n_s, 
+                             n_u = n_u,
+                             X = X,
+                             iterations = iter, 
+                             replication = rep)
+```
+
+### Compare Estimates to True
+
+#### Gamma
+
+```{r}
+sim2.fit$mean_gamma[1:2,]
+```
+
+```{r}
+apply(sim2.fit$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))[1:2,]
+```
+
+```{r}
+gamma_true[1:2,]
+```
+
+```{r}
+n_u[1:2,]
+n_s[1:2,]
+```
