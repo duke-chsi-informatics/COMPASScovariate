@@ -461,62 +461,64 @@ for (i in 1:nrow(beta.coverage)) {
 beta.no.cover.coord.df <- do.call('c', beta.no.cover.coord)
 ```
 
-Extract and plot posterior samples for flagged coefs
+Extract and plot posterior samples for flagged coefs (if any)
 ```{r}
-lapply(1:length(beta.no.cover.coord.df), FUN = function(i) {
-  #Extract the posterior samples for the current beta
-  post <- data.frame(samples = eval(parse(text = paste0("sim.fit$beta",
+if (length(beta.no.cover.coord.df) > 0) {
+  lapply(1:length(beta.no.cover.coord.df), FUN = function(i) {
+    #Extract the posterior samples for the current beta
+    post <- data.frame(samples = eval(parse(text = paste0("sim.fit$beta",
+                             "[",
+                             beta.no.cover.coord.df[i],
+                             ",]"
+                             )
+                                           )
+                                     )
+         )
+    
+    #Extract the true beta value
+    true.beta <- eval(parse(text = paste0("beta.true.final",
                            "[",
                            beta.no.cover.coord.df[i],
-                           ",]"
-                           )
-                                         )
-                                   )
-       )
-  
-  #Extract the true beta value
-  true.beta <- eval(parse(text = paste0("beta.true.final",
-                         "[",
-                         beta.no.cover.coord.df[i],
-                         "]"
-                                   )
-                     )
-               )
-  
-  #Make the plot
-  ggplot(data = post,
-         aes(x = samples)
-    )+
-    theme_bw()+
-    geom_vline(xintercept = 0,
-               size = 0.6,
-               color = "dark gray"
-    )+
-    geom_hline(yintercept = 0,
-               size = 0.6,
-               color = "dark gray"
-    )+
-    ggdist::stat_halfeye(
-      .width = c(0.95, 0.8),
-      point_interval = "median_qi"    #Use median for point est
-    )+
-    geom_vline(xintercept = true.beta,
-               color = "blue"
-    )+
-    xlab("Posterior sample")+
-    labs(title = paste0("Cluster: ", 
-                stringr::str_split(beta.no.cover.coord.df[i],
-                                   pattern = ", ",
-                                   simplify = TRUE
-                )[1],
-                ", Covariate: ",
-                stringr::str_split(beta.no.cover.coord.df[i],
-                                   pattern = ", ",
-                                   simplify = TRUE
-                )[2]
-                )
-    )
-})
+                           "]"
+                                     )
+                       )
+                 )
+    
+    #Make the plot
+    ggplot(data = post,
+           aes(x = samples)
+      )+
+      theme_bw()+
+      geom_vline(xintercept = 0,
+                 size = 0.6,
+                 color = "dark gray"
+      )+
+      geom_hline(yintercept = 0,
+                 size = 0.6,
+                 color = "dark gray"
+      )+
+      ggdist::stat_halfeye(
+        .width = c(0.95, 0.8),
+        point_interval = "median_qi"    #Use median for point est
+      )+
+      geom_vline(xintercept = true.beta,
+                 color = "blue"
+      )+
+      xlab("Posterior sample")+
+      labs(title = paste0("Cluster: ", 
+                  stringr::str_split(beta.no.cover.coord.df[i],
+                                     pattern = ", ",
+                                     simplify = TRUE
+                  )[1],
+                  ", Covariate: ",
+                  stringr::str_split(beta.no.cover.coord.df[i],
+                                     pattern = ", ",
+                                     simplify = TRUE
+                  )[2]
+                  )
+      )
+  })
+}
 ```
 
 #### Plot Posteriors for Estimates far from True Value
@@ -544,61 +546,63 @@ for (i in 1:nrow(beta.diff)) {
 beta.poor.coord.df <- do.call('c', beta.poor.coord)
 ```
 
-Extract and plot posterior samples for flagged coefs
+Extract and plot posterior samples for flagged coefs (if any)
 ```{r}
-lapply(1:length(beta.poor.coord.df), FUN = function(i) {
-  #Extract the posterior samples for the current beta
-  post <- data.frame(samples = eval(parse(text = paste0("sim.fit$beta",
+if (length(beta.poor.coord.df) > 0) {
+  lapply(1:length(beta.poor.coord.df), FUN = function(i) {
+    #Extract the posterior samples for the current beta
+    post <- data.frame(samples = eval(parse(text = paste0("sim.fit$beta",
+                             "[",
+                             beta.poor.coord.df[i],
+                             ",]"
+                             )
+                                           )
+                                     )
+         )
+    
+    #Extract the true beta value
+    true.beta <- eval(parse(text = paste0("beta.true.final",
                            "[",
                            beta.poor.coord.df[i],
-                           ",]"
-                           )
-                                         )
-                                   )
-       )
-  
-  #Extract the true beta value
-  true.beta <- eval(parse(text = paste0("beta.true.final",
-                         "[",
-                         beta.poor.coord.df[i],
-                         "]"
-                                   )
-                     )
-               )
-  
-  #Make the plot
-  ggplot(data = post,
-         aes(x = samples)
-    )+
-    theme_bw()+
-    geom_vline(xintercept = 0,
-               size = 0.6,
-               color = "dark gray"
-    )+
-    geom_hline(yintercept = 0,
-               size = 0.6,
-               color = "dark gray"
-    )+
-    ggdist::stat_halfeye(
-      .width = c(0.95, 0.8),
-      point_interval = "median_qi"    #Use median for point est
-    )+
-    geom_vline(xintercept = true.beta,
-               color = "blue"
-    )+
-    xlab("Posterior sample")+
-    labs(title = paste0("Cluster: ", 
-                stringr::str_split(beta.poor.coord.df[i],
-                                   pattern = ", ",
-                                   simplify = TRUE
-                )[1],
-                ", Covariate: ",
-                stringr::str_split(beta.poor.coord.df[i],
-                                   pattern = ", ",
-                                   simplify = TRUE
-                )[2]
-                )
-    )
-})
+                           "]"
+                                     )
+                       )
+                 )
+    
+    #Make the plot
+    ggplot(data = post,
+           aes(x = samples)
+      )+
+      theme_bw()+
+      geom_vline(xintercept = 0,
+                 size = 0.6,
+                 color = "dark gray"
+      )+
+      geom_hline(yintercept = 0,
+                 size = 0.6,
+                 color = "dark gray"
+      )+
+      ggdist::stat_halfeye(
+        .width = c(0.95, 0.8),
+        point_interval = "median_qi"    #Use median for point est
+      )+
+      geom_vline(xintercept = true.beta,
+                 color = "blue"
+      )+
+      xlab("Posterior sample")+
+      labs(title = paste0("Cluster: ", 
+                  stringr::str_split(beta.poor.coord.df[i],
+                                     pattern = ", ",
+                                     simplify = TRUE
+                  )[1],
+                  ", Covariate: ",
+                  stringr::str_split(beta.poor.coord.df[i],
+                                     pattern = ", ",
+                                     simplify = TRUE
+                  )[2]
+                  )
+      )
+  })
+}
 ```
 
