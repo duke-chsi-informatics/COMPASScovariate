@@ -46,9 +46,15 @@ Using real data (COMPASS vignette):
 4. Generate X 
 5. Run logistic regression (glmnet with lasso) between gamma and X. Estimated beta will be considered "true" beta. 
 
-Note on iterations:
+**Note on iterations:**
 
 Keep only the last X iterations and use the first ones to warm up chains.
+
+**12/13/22 To Do:**
+
+- Create density plot of posterior for betas that have a large difference between estimated and true.
+- Reduce to 2 markers = 4 cell subsets
+- Modify covariates (intercept) to allow ~ 50% of gammas to be 1
 
 ### Additional Complexities
 
@@ -133,7 +139,6 @@ Bind intercept betas to other betas
 beta.true.final <- cbind(int.true, beta.true.selection)
 ```
 
-
 Make covariates
 ```{r}
 X <- cbind(
@@ -147,6 +152,7 @@ X <- cbind(
 )
 ```
 
+### True Gamma Matrix
 
 Generate omega_ik -- probability that gamma_ik = 1
 
@@ -181,7 +187,7 @@ for (i in 1:I) {
 ```
 
 
-### Counts
+### True Counts
 
 Empty matrices for stim and unstim counts. **Note:** Create K columns with 0s, not K - 1
 ```{r}
@@ -357,11 +363,11 @@ getmode <- function(v) {
 #### Gamma
 
 ```{r}
-fit_cov$mean_gamma[1:2,]
+sim1.fit$mean_gamma[1:2,]
 ```
 
 ```{r}
-apply(fit_cov$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))[1:2,]
+apply(sim1.fit$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))[1:2,]
 ```
 
 
@@ -378,14 +384,226 @@ n_s[1:2,]
 #### Betas
 
 ```{r}
-apply(fit_cov$beta, MARGIN = c(1,2), FUN = function(x) median(x))
+apply(sim1.fit$beta, MARGIN = c(1,2), FUN = function(x) median(x))
 ```
 
 ```{r}
 beta.true.final
 ```
 
-##Method 3: Lynn's Original Method
+## Method 2
+
+**Approach**: An iteration of Method 1 above except allow the total number of counts in the k-1 category to increase depending on the number of gammas = 1 for that sample.
+
+**Note:** Re-use the regression coefs and gamma matrix from method 1 above.
+
+### True Counts
+
+Empty matrices for stim and unstim counts. **Note:** Create K columns with 0s, not K - 1
+```{r}
+n_u <- matrix(0,
+              nrow = I,
+              ncol = K)
+
+n_s <- matrix(0,
+              nrow = I,
+              ncol = K)
+```
+
+
+#### Unstimulated
+
+Generate unstimulated count values for each subject
+```{r}
+#Generate total counts
+Nu = ceiling(
+      rnorm(mean = e.total.mu, 
+            sd = e.total.sd,
+            n = I)
+)
+
+Nu.subset = ceiling(
+              rnorm(mean = e.subset.mu, 
+                    sd = e.subset.sd,
+                    n = I
+              ) 
+)
+```
+
+Loop over each sample and do two things:
+
+  1. Create a vector of length K - 1 (not K) of concentration parameters drawn from a lognormal distribution with an unstimulated-specific log-mean.
+  2. Using the vector of concentration parameters, draw a vector of counts of length K - 1 (not K) from a Dirichlet-Multinomial distribution and fill the first K - 1 columns of the ith row of n_u
+
+**Notes:** 
+
+- Leave the last column as 0 for all negative cell subset
+- Use Nu instead of Nu.subset because now Kth category included in DM-generated data
+
+
+```{r}
+concentration_u = matrix(NA,
+                         nrow = I,
+                         ncol = K
+                  )
+
+for (i in 1:I) {
+  concentration_u[i,1:K1] = rlnorm(n = K1, 
+                 meanlog = (pu.logmu), 
+                 sdlog = p.logsd
+  )
+  
+  concentration_u[i,K] = rlnorm(n = 1,
+                                meanlog = pu.logmu*3,
+                                sdlog = p.logsd
+  )
+  #HMP version
+  n_u[i,1:K] = t(matrix(HMP::Dirichlet.multinomial(Nrs = Nu[i], shape = concentration_u[i,])))
+  
+  # #MultiRNG version
+  # n_u[i,1:K] = MultiRNG::draw.dirichlet.multinomial(N = Nu[i],                    #Total counts
+  #                                                        no.row = 1,                      #Sample size
+  #                                                        d = length(concentration_u[i,]), #Number of categories (same as length of concentration vector)
+  #                                                        alpha = concentration_u[i,],     #Concentration vector
+  #                                                        beta = 1                         #Common shape parameter
+  #                                                             )
+}
+```
+
+Check rowsums
+```{r}
+identical(rowSums(n_u), Nu)
+```
+
+#### Stimulated
+
+Generate stimulated count values for each subject
+```{r}
+#Generate total counts
+Ns = ceiling(
+      rnorm(mean = e.total.mu, 
+            sd = e.total.sd,
+            n = I)
+)
+
+Ns.subset = ceiling(
+              rnorm(mean = e.subset.mu, 
+                    sd = e.subset.sd,
+                    n = I
+              ) 
+)
+```
+
+Loop over each sample and do two things:
+
+  1. Create a vector of length K - 1 (not K) of concentration parameters drawn from a lognormal distribution with an unstimulated-specific log-mean.
+  2. Using the vector of concentration parameters, draw a vector of counts of length K - 1 (not K) from a Dirichlet-Multinomial distribution and fill the first K - 1 columns of the ith row of n_u
+
+**Notes:** 
+
+  - Leave the last column as 0
+  - Concentration is shifted by ps.logmu.diff if gamma = 1
+  - Use Nu instead of Nu.subset because now Kth category included in DM-generated data
+
+```{r}
+concentration_s = matrix(NA,
+                         nrow = I,
+                         ncol = K
+                  )
+
+for (i in 1:I) {
+  concentration_s[i, 1:K1] = rlnorm(n = K1, 
+                 meanlog = (pu.logmu + ps.logmu.diff * gamma.m[i, ]), 
+                 sdlog = p.logsd
+  )
+  
+  concentration_s[i, K] = rlnorm(n = 1,
+                                meanlog = pu.logmu*3,
+                                sdlog = p.logsd
+  )
+  #HMP version
+  n_s[i,1:K] = t(matrix(HMP::Dirichlet.multinomial(Nrs = Ns[i], shape = concentration_s[i,])))
+  
+  # #MultiRNG version
+  # n_s[i,1:K] = MultiRNG::draw.dirichlet.multinomial(N = Ns[i],                #Total counts
+  #                                                    no.row = 1,                      #Sample size
+  #                                                    d = length(concentration_s[i,]), #Number of categories (same as length of concentration vector)
+  #                                                    alpha = concentration_s[i,],     #Concentration vector
+  #                                                    beta = 1                         #Common shape parameter
+  #                                                             )
+}
+
+```
+
+Check rowsums
+```{r}
+identical(rowSums(n_s), Ns)
+```
+
+Check that rowsums are similar for sample sample between unstim and stim
+```{r}
+rowSums(n_u)[1:10]
+rowSums(n_s)[1:10]
+```
+
+### Run COMPASScovariate
+
+Create a version of X without an intercept column
+```{r}
+X.mod = X[,-1]
+```
+
+```{r message=FALSE, warning=FALSE}
+sim2.fit = .COMPASS.covariate(n_s = n_s, 
+                             n_u = n_u,
+                             X = X.mod,
+                             iterations = iter, 
+                             replication = rep)
+```
+
+### Compare Estimates to True
+
+Create a custom function for calculating the mode
+```{r}
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+```
+
+#### Gamma
+
+```{r}
+sim2.fit$mean_gamma[1:2,]
+```
+
+```{r}
+apply(sim2.fit$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))[1:2,]
+```
+
+
+```{r}
+gamma.m[1:2,]
+```
+
+```{r}
+n_u[1:2,]
+n_s[1:2,]
+```
+
+
+#### Betas
+
+```{r}
+apply(sim2.fit$beta, MARGIN = c(1,2), FUN = function(x) median(x))
+```
+
+```{r}
+beta.true.final
+```
+
+
+## Method 3: Lynn's Original Method
 
 ### True Regression Coefs
 
