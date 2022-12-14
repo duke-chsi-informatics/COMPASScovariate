@@ -346,7 +346,7 @@ X.mod = X[,-1]
 ```
 
 ```{r message=TRUE, warning=FALSE}
-sim2.fit = .COMPASS.covariate(n_s = n_s, 
+sim.fit = .COMPASS.covariate(n_s = n_s, 
                              n_u = n_u,
                              X = X.mod,
                              iterations = iter, 
@@ -366,13 +366,13 @@ getmode <- function(v) {
 ### Gamma
 
 ```{r}
-sim2.fit$mean_gamma[1:4,]
+sim.fit$mean_gamma[1:4,]
 ```
 
 ```{r}
-sim2.fit.gamma <- apply(sim2.fit$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))
+sim.fit.gamma <- apply(sim.fit$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))
 
-sim2.fit.gamma[1:4,]
+sim.fit.gamma[1:4,]
 ```
 
 
@@ -392,7 +392,7 @@ print(
   paste(
     "Percent gamma correct (excluding Kth subset):",
     round(
-      sum(gamma.m == sim2.fit.gamma[,-ncol(sim2.fit.gamma)]) /
+      sum(gamma.m == sim.fit.gamma[,-ncol(sim.fit.gamma)]) /
         (dim(gamma.m)[1] * dim(gamma.m)[2]) * 100,
       digits = 2
     )
@@ -403,9 +403,9 @@ print(
 ### Betas
 
 ```{r}
-sim2.fit.beta.median <- apply(sim2.fit$beta, MARGIN = c(1,2), FUN = function(x) median(x))
+sim.fit.beta.median <- apply(sim.fit$beta, MARGIN = c(1,2), FUN = function(x) median(x))
 
-sim2.fit.beta.median
+sim.fit.beta.median
 ```
 
 ```{r}
@@ -416,12 +416,12 @@ beta.true.final
 
 Find 95% quantile intervals for each beta
 ```{r}
-lower.95 <- apply(sim2.fit$beta, MARGIN = c(1,2), FUN = function(x) quantile(x,
+lower.95 <- apply(sim.fit$beta, MARGIN = c(1,2), FUN = function(x) quantile(x,
                                                                  prob = 0.025
                                                                  )
       )
 
-upper.95 <- apply(sim2.fit$beta, MARGIN = c(1,2), FUN = function(x) quantile(x,
+upper.95 <- apply(sim.fit$beta, MARGIN = c(1,2), FUN = function(x) quantile(x,
                                                                  prob = 0.975
                                                                  )
       )
@@ -465,7 +465,7 @@ Extract and plot posterior samples for flagged coefs
 ```{r}
 lapply(1:length(beta.no.cover.coord.df), FUN = function(i) {
   #Extract the posterior samples for the current beta
-  post <- data.frame(samples = eval(parse(text = paste0("sim2.fit$beta",
+  post <- data.frame(samples = eval(parse(text = paste0("sim.fit$beta",
                            "[",
                            beta.no.cover.coord.df[i],
                            ",]"
@@ -528,7 +528,7 @@ beta.diff.cutoff <- 0.1
 
 Find top values of absolute difference between estimate and true beta
 ```{r}
-beta.diff <- abs(beta.true.final - sim2.fit.beta.median)
+beta.diff <- abs(beta.true.final - sim.fit.beta.median)
 
 #Loop over rows of beta.diff and find row,col of "bad" values where diff is high
 beta.poor.coord <- list(NULL)
@@ -548,7 +548,7 @@ Extract and plot posterior samples for flagged coefs
 ```{r}
 lapply(1:length(beta.poor.coord.df), FUN = function(i) {
   #Extract the posterior samples for the current beta
-  post <- data.frame(samples = eval(parse(text = paste0("sim2.fit$beta",
+  post <- data.frame(samples = eval(parse(text = paste0("sim.fit$beta",
                            "[",
                            beta.poor.coord.df[i],
                            ",]"
