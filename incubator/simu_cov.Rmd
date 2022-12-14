@@ -19,7 +19,7 @@ source("~/project_repos/COMPASScovariate/R/COMPASS-covariate.R")
 source("~/project_repos/COMPASScovariate/R/updatebeta.R")
 source("~/project_repos/COMPASScovariate/R/utils.R")
 
-library(foreach); library(doParallel); library(HMP); library(MultiRNG); library(MCMCpack); library(devtools)
+library(foreach); library(doParallel); library(HMP); library(MultiRNG); library(MCMCpack); library(devtools); library(ggplot2)
 
 # install.packages("MultiRNG")
 ```
@@ -555,7 +555,7 @@ Create a version of X without an intercept column
 X.mod = X[,-1]
 ```
 
-```{r message=FALSE, warning=FALSE}
+```{r message=TRUE, warning=FALSE}
 sim2.fit = .COMPASS.covariate(n_s = n_s, 
                              n_u = n_u,
                              X = X.mod,
@@ -576,33 +576,135 @@ getmode <- function(v) {
 #### Gamma
 
 ```{r}
-sim2.fit$mean_gamma[1:2,]
+sim2.fit$mean_gamma[1:4,]
 ```
 
 ```{r}
-apply(sim2.fit$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))[1:2,]
+sim2.fit.gamma <- apply(sim2.fit$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))
+
+sim2.fit.gamma[1:4,]
 ```
 
 
 ```{r}
-gamma.m[1:2,]
+gamma.m[1:4,]
 ```
 
 ```{r}
-n_u[1:2,]
-n_s[1:2,]
+n_u[1:4,]
+n_s[1:4,]
 ```
 
+##### Percentage Correct
+
+```{r}
+print(
+  paste(
+    "Percent gamma correct (excluding Kth subset):",
+    round(
+      sum(gamma.m == sim2.fit.gamma[,-ncol(sim2.fit.gamma)]) /
+        (dim(gamma.m)[1] * dim(gamma.m)[2]) * 100,
+      digits = 2
+    )
+  )
+)
+```
 
 #### Betas
 
 ```{r}
-apply(sim2.fit$beta, MARGIN = c(1,2), FUN = function(x) median(x))
+sim2.fit.beta.median <- apply(sim2.fit$beta, MARGIN = c(1,2), FUN = function(x) median(x))
+
+sim2.fit.beta.median
 ```
 
 ```{r}
 beta.true.final
 ```
+
+##### Plot Poor Estimates
+
+A cutoff value for the diff between true and estimated beta to decide whether to plot the corresponding posterior
+```{r}
+beta.diff.cutoff <- 0.1
+```
+
+Find top values of absolute difference between estimate and true beta
+```{r}
+beta.diff <- abs(beta.true.final - sim2.fit.beta.median)
+
+#Loop over rows of beta.diff and find row,col of "bad" values where diff is high
+beta.poor.coord <- list(NULL)
+for (i in 1:nrow(beta.diff)) {
+  if(length(which(beta.diff[i,] > beta.diff.cutoff)) > 0) {
+    #Paste the row name (i) with the indices of the columns for the current row
+    beta.poor.coord[[i]] <- paste(i, which(beta.diff[i,] > beta.diff.cutoff), sep = ", ")
+  } else {
+    beta.poor.coord[[i]] <- NULL
+  }
+}
+
+beta.poor.coord.df <- do.call('c', beta.poor.coord)
+```
+
+Extract and plot posterior samples for chosen beta
+```{r}
+lapply(1:length(beta.poor.coord.df), FUN = function(i) {
+  #Extract the posterior samples for the current beta
+  post <- data.frame(samples = eval(parse(text = paste0("sim2.fit$beta",
+                           "[",
+                           beta.poor.coord.df[i],
+                           ",]"
+                           )
+                                         )
+                                   )
+       )
+  
+  #Extract the true beta value
+  true.beta <- eval(parse(text = paste0("beta.true.final",
+                         "[",
+                         beta.poor.coord.df[i],
+                         "]"
+                                   )
+                     )
+               )
+  
+  #Make the plot
+  ggplot(data = post,
+         aes(x = samples)
+    )+
+    theme_bw()+
+    geom_vline(xintercept = 0,
+               size = 0.6,
+               color = "dark gray"
+    )+
+    geom_hline(yintercept = 0,
+               size = 0.6,
+               color = "dark gray"
+    )+
+    ggdist::stat_halfeye(
+      .width = c(0.95, 0.8),
+      point_interval = "median_qi"    #Use median for point est
+    )+
+    geom_vline(xintercept = true.beta,
+               color = "blue"
+    )+
+    xlab("Posterior sample")+
+    labs(title = paste0("Cluster: ", 
+                stringr::str_split(beta.poor.coord.df[i],
+                                   pattern = ", ",
+                                   simplify = TRUE
+                )[1],
+                ", Covariate: ",
+                stringr::str_split(beta.poor.coord.df[i],
+                                   pattern = ", ",
+                                   simplify = TRUE
+                )[2]
+                )
+    )
+})
+```
+
 
 
 ## Method 3: Lynn's Original Method
