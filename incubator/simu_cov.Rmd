@@ -76,7 +76,7 @@ Keep only the last X iterations and use the first ones to warm up chains.
   6. Generate unstimulated and stimulated counts from a Dirichlet-Multinomial distribution where the concentration parameters are drawn from a lognormal distribution with same logmean and logsd values. 
     1. For stimulated cluster-samples (where gamma = 1), shift the logmean by ps.logmu.diff to increase the concentration parameter by exp(ps.logmu.diff).
     2. For each sample, number of stimulated and unstimulated counts ~ Normal(e.total.mu, e.total.sd). This is the total number of stim and unstim counts for each sample.
-    3. For both stimluated and unstimulated, use Dirichlet-Multinomial to draw subset of stimulated and unstimulated counts ~ Normal(e.subset.mu, e.subset.sd). This is the number of stim and unstim counts for the k-1 subsets.
+    3. For both stimluated and unstimulated, use Dirichlet-Multinomial to draw subset of stimulated and unstimulated counts ~ Normal(e.subset.mu, e.subset.sd). This is the number of stim and unstim counts for the k-1 subsets. **Note:** The values of the concentration parameter can be interpreted as prior pseudo-counts and thus determine the variance among categories. 
     4. Find the counts in the kth subset (corresponding to all negative cell subset) as the total number of counts minus the sum of the first k - 1 subsets
       + This implies that the difference between stim and unstim for the kth subset is not a function of the betas
   
@@ -86,8 +86,8 @@ Keep only the last X iterations and use the first ones to warm up chains.
 ```{r}
 set.seed(111)
 
-I <- 200 ## sample size i.e., #subjects; I = 30
-K <- 8 ## number of cell categories: K = 16
+I <- 200 ## sample size i.e., #subjects
+K <- 4 ## number of cell categories
 K1 = K-1 ## number of cell categories minus one (last one is baseline)
 p <- 5 # number of covariates # larger p
 e.total.mu = 10000 #Mean total number of events per subject
@@ -98,13 +98,13 @@ e.subset.sd = 5   #SD of number of events per subject that are not in the Kth ca
 #Betas
 beta.mu = 0
 beta.sigma = 0.3
-int.mu = -2
+int.mu = 0
 int.sd = 0.1
 beta.selection.cutoff = 0.1
 
 ### Pu and Ps
 #Concentration params drawn from lognormal
-pu.logmu = log(10)
+pu.logmu = log(20)
 p.logsd = 0.01
 ps.logmu.diff = log(5)
 
@@ -112,6 +112,8 @@ ps.logmu.diff = log(5)
 iter = 40000
 rep = 2
 ```
+
+### True Regression Coefs
 
 Set true betas
 ```{r}
