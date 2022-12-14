@@ -97,10 +97,10 @@ e.subset.sd = 5   #SD of number of events per subject that are not in the Kth ca
 
 #Betas
 beta.mu = 0
-beta.sigma = 0.3
+beta.sigma = 0.8
 int.mu = 0
 int.sd = 0.1
-beta.selection.cutoff = 0.1
+beta.selection.cutoff = 0.2
 
 ### Pu and Ps
 #Concentration params drawn from lognormal
@@ -109,8 +109,20 @@ p.logsd = 0.01
 ps.logmu.diff = log(5)
 
 ### COMPASScovariate
-iter = 40000
+iter = 5000
 rep = 2
+
+#Figure output
+fig.out.dir = file.path("/work",
+                        Sys.getenv("USER"),
+                        "COMPASScovariate-sim",
+                        "output",
+                        "figures"
+)
+dir.create(fig.out.dir,
+           showWarnings = FALSE,
+           recursive = TRUE
+)
 ```
 
 ### True Regression Coefs
@@ -188,6 +200,10 @@ for (i in 1:I) {
 }
 ```
 
+Check proportion = 1
+```{r}
+round(sum(gamma.m) / length(gamma.m), 3)
+```
 
 ### True Counts
 
@@ -443,6 +459,129 @@ print(
   )
 )
 ```
+
+
+#### Plot All Betas
+
+1. Extract beta draws into a dataframe with cluster and covariate indicators
+2. Row-bind together into long format
+3. Plot with x as cluster and y as covariate
+
+Extract beta draws into a dataframe with cluster and covariate indicators
+```{r}
+cov.out <- list(NULL)
+cluster.out <- list(NULL)
+
+#Loop over each k-1 cluster
+for (k in 1:K1) {
+  #Extract a matrix of draws x coefficients for current cluster
+  cluster <- t(apply(sim.fit$beta, MARGIN = c(2,3), FUN = function(x) x[k]))
+  
+  #Make a dataframe for each covariate (column) with current cluster and covariate ID
+  for (cov in 1:(p+1)) { #p+1 b/c of intercept
+    cov.out[[cov]] <- 
+      data.frame(cluster = k,
+               covariate = cov,
+               value = apply(cluster, MARGIN = 1, FUN = function(y) y[cov])
+    )
+  }
+  
+  #Combine the dataframes for each coefficient for the current cluster
+  cluster.out[[k]] <- do.call('rbind', cov.out)
+}
+
+#Combine the dataframes for all clusters
+post.out <- do.call('rbind', cluster.out)
+```
+
+Check that rows of post.out match dimension of original beta draws
+```{r}
+dim(post.out)[1] ==
+  dim(sim.fit$beta)[1] * (dim(sim.fit$beta)[2]) * dim(sim.fit$beta)[3]
+```
+
+Make cluster and covariate factors
+```{r}
+post.out$cluster <- as.factor(post.out$cluster)
+post.out$covariate <- as.factor(post.out$covariate)
+```
+
+Include true betas
+```{r}
+post.out$true.beta <- NA
+
+for (k in 1:K1) {
+  for (cov in 1:(p+1)) {
+    post.out$true.beta[post.out$cluster == k & post.out$covariate == cov] <- beta.true.final[k,cov]
+  }
+}
+
+#Check that length of unique true.beta is equal to number of true betas
+(
+#Number of unique betas excluding duplicated 0s
+length(unique(post.out$true.beta)) +
+  #Number of cluster-covariate combinations where true.beta is 0 minus 1 (b/c 1 true 0 already counted above)
+  length(unique(paste(post.out$cluster[post.out$true.beta == 0], post.out$covariate[post.out$true.beta == 0]))) - 1
+) ==
+  #Equal to dimension of true beta (without intercept?)
+  length(beta.true.final)
+```
+
+Make the plot
+```{r fig.width = 4, fig.height = 3}
+#Mapping nice cluster names
+cluster_names <- c(
+  "1" = "Subset 1",
+  "2" = "Subset 2",
+  "3" = "Subset 3"
+)
+
+beta.post.true.plot <- 
+  ggplot(data = post.out,
+         aes(y = covariate, x = value)
+    )+
+    geom_vline(xintercept = 0,
+               size = 0.6,
+               color = "dark gray"
+    )+
+    tidybayes::stat_halfeye(aes(fill = stat(level)),
+                            fatten_point = 0.85,
+                            alpha = 0.6
+    ) +
+    geom_segment(
+                 aes(x = true.beta,
+                     y = as.integer(covariate) - 0.15,
+                     yend = as.integer(covariate) + 0.15,
+                     xend = true.beta
+                  ),
+                 size = 0.2
+    )+
+    facet_wrap(~ cluster,
+               labeller = labeller(
+                 cluster = cluster_names
+               )
+    )+
+    theme_bw()+
+    xlab("Value")+
+    ylab("Covariate")+
+    scale_fill_brewer(name = "Credible\nlevel",
+                      na.translate = FALSE,
+                      palette = "Set1",
+    )
+
+beta.post.true.plot
+```
+
+```{r}
+ggsave(beta.post.true.plot,
+       filename = file.path(fig.out.dir,
+                            "beta.post.true.plot.pdf"
+                            ),
+       width = 6,
+       height = 4
+       )
+```
+
 
 #### Plot Posteriors Not Achieving Coverage
 
