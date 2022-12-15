@@ -19,7 +19,7 @@ source("~/project_repos/COMPASScovariate/R/COMPASS-covariate.R")
 source("~/project_repos/COMPASScovariate/R/updatebeta.R")
 source("~/project_repos/COMPASScovariate/R/utils.R")
 
-library(foreach); library(doParallel); library(HMP); library(MultiRNG); library(MCMCpack); library(devtools); library(ggplot2)
+library(foreach); library(doParallel); library(HMP); library(MCMCpack); library(devtools); library(ggplot2)
 
 # install.packages("MultiRNG")
 ```
@@ -67,18 +67,18 @@ Keep only the last X iterations and use the first ones to warm up chains.
 
 **Approach**
 
-1. Matrix of true betas for each k-1 subset for each covariate p ~ Normal(beta.mu, beta.sigma)
-  1. Model selection where any beta where |beta| < beta.selection.cutoff -> 0
-2. Vector of true intercepts for each k-1 subset ~ Normal(int.mu, int.sd)
-  1. int.mu is 0 to keep probability that gamma = 1 ~ 50%, which makes estimating betas easier.
-3. Matrix X (I x p) of covariates with first column of 1's for intercept
-4. Omega (I x K1): For each sample, for each subset, generate linear predictor as linear combination of sample's covariate values X[i,] and subset-specific true betas beta.true.final[k,]
-5. gamma.m (I x K1): For each sample, for each subset, map linear predictor to probability using inverse-logit function
-6. Generate unstimulated and stimulated counts from a Dirichlet-Multinomial distribution where the concentration parameters are drawn from a lognormal distribution with same logmean and logsd values.
-  1. For stimulated cluster-samples (where gamma = 1), shift the logmean by ps.logmu.diff to increase the concentration parameter by exp(ps.logmu.diff).
-  2. For each sample, number of stimulated and unstimulated counts ~ Normal(e.total.mu, e.total.sd). This is the total number of stim and unstim counts for each sample.
-  3. For both stimluated and unstimulated, use Dirichlet-Multinomial to draw subset of stimulated and unstimulated counts ~ Normal(e.mu, e.sd). This is the number of stim and unstim counts for all K subsets. **Note:** The values of the concentration parameter can be interpreted as prior pseudo-counts and thus determine the variance among categories. Use high concentration parameter values to reduce the variance in counts among categories in resulting draws.
-  4. **Important:** The Kth category is included in the draws, but has a very large concentration parameter compared to rest of the categories so that the number of counts is much larger. This is to mimic real flow data where the majority of cells are in the "all negative" subset (ie. they don't belong to any of the mutually exclusive categories created by the markers of interest). We include this category because otherwise additional counts for a stimulated cell subset take away counts from only the k - 1 markers, resulting in significantly reduced counts for them (Lynn's original method). Here, the counts for the stimulated cell subset are "taken" from all other subsets with probability proportionate to the concentration parameters. Since the kth subset is given such a high concentration, it is much more likely that the counts are "taken" from that category, thus allowing the counts for the k - 1 subsets to remain constant (with some noise) between unstim and stim samples if they are not truely stimulated. 
+1) Matrix of true betas for each k-1 subset for each covariate p ~ Normal(beta.mu, beta.sigma)
+    a) Model selection where any beta where |beta| < beta.selection.cutoff -> 0
+2) Vector of true intercepts for each k-1 subset ~ Normal(int.mu, int.sd)
+    a) int.mu is 0 to keep probability that gamma = 1 ~ 50%, which makes estimating betas easier.
+3) Matrix X (I x p) of covariates with first column of 1's for intercept
+4) Omega (I x K1): For each sample, for each subset, generate linear predictor as linear combination of sample's covariate values X[i,] and subset-specific true betas beta.true.final[k,]
+5) gamma.m (I x K1): For each sample, for each subset, map linear predictor to probability using inverse-logit function
+6) Generate unstimulated and stimulated counts from a Dirichlet-Multinomial distribution where the concentration parameters are drawn from a lognormal distribution with same logmean and logsd values.
+    a) For stimulated cluster-samples (where gamma = 1), shift the logmean by ps.logmu.diff to increase the concentration parameter by exp(ps.logmu.diff).
+    b) For each sample, number of stimulated and unstimulated counts ~ Normal(e.total.mu, e.total.sd). This is the total number of stim and unstim counts for each sample.
+    c) For both stimluated and unstimulated, use Dirichlet-Multinomial to draw subset of stimulated and unstimulated counts ~ Normal(e.mu, e.sd). This is the number of stim and unstim counts for all K subsets. **Note:** The values of the concentration parameter can be interpreted as prior pseudo-counts and thus determine the variance among categories. Use high concentration parameter values to reduce the variance in counts among categories in resulting draws.
+    d) **Important:** The Kth category is included in the draws, but has a very large concentration parameter compared to rest of the categories so that the number of counts is much larger. This is to mimic real flow data where the majority of cells are in the "all negative" subset (ie. they don't belong to any of the mutually exclusive categories created by the markers of interest). We include this category because otherwise additional counts for a stimulated cell subset take away counts from only the k - 1 markers, resulting in significantly reduced counts for them (Lynn's original method). Here, the counts for the stimulated cell subset are "taken" from all other subsets with probability proportionate to the concentration parameters. Since the kth subset is given such a high concentration, it is much more likely that the counts are "taken" from that category, thus allowing the counts for the k - 1 subsets to remain constant (with some noise) between unstim and stim samples if they are not truely stimulated. 
   
 
 ### Set Fixed Parameters
