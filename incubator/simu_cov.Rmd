@@ -86,7 +86,7 @@ Keep only the last X iterations and use the first ones to warm up chains.
 ```{r}
 set.seed(111)
 
-I <- 200 ## sample size i.e., #subjects
+I <- 100 ## sample size i.e., #subjects
 K <- 4 ## number of cell categories
 K1 = K-1 ## number of cell categories minus one (last one is baseline)
 p <- 5 # number of covariates # larger p
@@ -109,7 +109,7 @@ p.logsd = 0.01
 ps.logmu.diff = log(5)
 
 ### COMPASScovariate
-iter = 5000
+iter = 8000
 rep = 2
 
 #Figure output
