@@ -7,6 +7,7 @@ output:
     code_folding: show
     toc: true
     toc_float: true
+    df_print: paged
 ---
 
 ```{r setup, include=FALSE}
@@ -65,9 +66,10 @@ library(foreach); library(doParallel); library(HMP); library(MCMCpack); library(
 ```{r}
 set.seed(111)
 #Get number of threads from SLURM scheduler -- set in 'run_simu_cov.sh'
-threads = Sys.getenv("SLURM_CPUS_PER_TASK")
-iter = Sys.getenv("ITER")
-rep = Sys.getenv("REP")
+iter = as.integer(Sys.getenv("ITER"))
+rep = as.integer(Sys.getenv("REP"))
+# iter = 1000
+# rep = 1
 
 #Total counts
 e.total.mu = 10000 #Mean total number of events per subject
@@ -103,7 +105,10 @@ dir.create(out.dir,
 ### Generate combinations of simulation parameters
 
 ```{r}
-sim.pars <- expand.grid(I = c(30, 60, 100, 200),
+threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
+# threads = 4
+
+sim.pars <- expand.grid(I = c(15, 30, 60, 100, 200),
                         K = c(4),
                         p = c(5)
             )
@@ -426,6 +431,20 @@ lapply(sim.out.list, FUN = function(sim) {
         2
       # )
     )
+  
+  ##################
+  ## Save Fit Object
+  ##################
+  
+  saveRDS(sim.fit,
+          file = file.path(out.obj.dir.loop,
+                           paste(paste0("I:", I),
+                                 paste0("K:", K),
+                                 paste0("p:", p, ".RDS"),
+                                 sep = "_"
+                                )
+                           )
+          )
   
   #################
   ## Plot All Betas
