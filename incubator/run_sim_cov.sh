@@ -3,8 +3,8 @@
 #SBATCH -p chsi
 #SBATCH -A chsi
 #SBATCH --time=08:00:00
-#SBATCH --mem=8G
-#SBATCH -c 5
+#SBATCH --mem-per-cpu=1G
+#SBATCH -c 25
 
 export SINGULARITY_IMAGE="oras://gitlab-registry.oit.duke.edu/chsi-informatics/containers/compasscovariate-singularity:v003"
 export BIND_ARGS="--bind /work:/work"
