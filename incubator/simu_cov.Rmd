@@ -65,11 +65,13 @@ library(foreach); library(doParallel); library(HMP); library(MCMCpack); library(
 
 ```{r}
 set.seed(111)
-#Get number of threads from SLURM scheduler -- set in 'run_simu_cov.sh'
-iter = as.integer(Sys.getenv("ITER"))
-rep = as.integer(Sys.getenv("REP"))
-# iter = 1000
-# rep = 1
+#Get number of iter and reps from 'run_simu_cov.sh'
+iter = as.integer(Sys.getenv("ITER")) #Number of COMPASScovariate iterations per replicate
+rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
+sim.rep = 5 #Number of replicates per parameter combination
+
+# iter = 1000 #Number of COMPASScovariate iterations per replicate
+# rep = 1     #Number of COMPASScovariate replicates
 
 #Total counts
 e.total.mu = 10000 #Mean total number of events per subject
@@ -105,13 +107,23 @@ dir.create(out.dir,
 ### Generate combinations of simulation parameters
 
 ```{r}
+#Get number of threads from SLURM scheduler as # of CPUs allocated
 threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
-# threads = 4
 
+#Make a single df of all combinations of parameters
 sim.pars <- expand.grid(I = c(15, 30, 60, 100, 200),
                         K = c(4),
                         p = c(5)
             )
+
+#Repeat the df to create replicates for each combination -- repeat 'sim.rep' times
+sim.pars <- do.call('rbind', lapply(1:sim.rep, FUN = function(simrep) {
+  data.frame(
+    sim_rep = simrep,
+    sim.pars
+  )
+  })
+)
 ```
 
 ### Run Simulation
@@ -125,6 +137,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS")) %dopar% 
   I <- sim.pars[s,]$I ## sample size i.e., #subjects; I = 30
   K <- sim.pars[s,]$K ## number of cell categories: K = 16
   p <- sim.pars[s,]$p # number of covariates # larger p
+  sim_rep <- sim.pars[s,]$sim_rep
   K1 = K-1 ## number of cell categories minus one (last one is baseline)
 
   
@@ -330,7 +343,8 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS")) %dopar% 
                        I,
                        K,
                        K1,
-                       p
+                       p,
+                       sim_rep
   )
   
   names(results.list) <- c('sim.fit',
@@ -339,7 +353,8 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS")) %dopar% 
                            'I',
                            'K',
                            'K1',
-                           'p')
+                           'p',
+                           'sim_rep')
   
   return(results.list)
 }
@@ -368,6 +383,7 @@ lapply(sim.out.list, FUN = function(sim) {
   K <- sim$K
   K1 <- sim$K1
   p <- sim$p
+  sim_rep <- sim$sim_rep
   sim.fit <- sim$sim.fit
   gamma.m <- sim$gamma.m
   beta.true.final <- sim$beta.true.final
@@ -533,10 +549,10 @@ lapply(sim.out.list, FUN = function(sim) {
            aes(y = covariate, x = value)
       )+
       geom_vline(xintercept = 0,
-                 size = 0.6,
+                 linewidth = 0.6,
                  color = "dark gray"
       )+
-      tidybayes::stat_halfeye(aes(fill = stat(level)),
+      tidybayes::stat_halfeye(aes(fill = after_stat(level)),
                               fatten_point = 0.85,
                               alpha = 0.6
       ) +
@@ -546,7 +562,7 @@ lapply(sim.out.list, FUN = function(sim) {
                        yend = as.integer(covariate) + 0.15,
                        xend = true.beta
                     ),
-                   size = 0.2
+                   linewidth = 0.2
       )+
       facet_wrap(~ cluster,
                  labeller = labeller(
@@ -693,8 +709,11 @@ lapply(sim.out.list, FUN = function(sim) {
                     I = I,
                     K = K,
                     p = p,
+                    Iters = iter,
+                    Reps = rep,
+                    Simulation.replicate = sim_rep,
                     Percent.gamma.correct = percent.gamma.correct,
-                    Percent.beta.coverage = percent.beta.coverage,
+                    Percent.beta.95.coverage = percent.beta.coverage,
                     Post.out.check = post.out.dim.check,
                     True.beta.check = true.beta.check
   )
@@ -704,7 +723,23 @@ lapply(sim.out.list, FUN = function(sim) {
 })
 ```
 
+## Summarize
+
 ```{r}
-do.call('rbind', fits.out)
+sim.stats <- do.call('rbind', fits.out)
+
+sim.stats
+```
+
+```{r}
+sim.stats %>%
+  dplyr::group_by(I, K, p) %>%
+  dplyr::summarize(
+            iter = unique(iter),
+            Percent.gamma.correct.mean = round(mean(Percent.gamma.correct), 2),
+            Percent.gamma.correct.sd = round(sd(Percent.gamma.correct), 2),
+            Percent.beta.95.coverage.mean = round(mean(Percent.beta.95.coverage), 2),
+            Percent.beta.95.coverage.sd = round(sd(Percent.beta.95.coverage), 2)
+  )
 ```
 
