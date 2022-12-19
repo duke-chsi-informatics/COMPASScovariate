@@ -66,11 +66,10 @@ library(foreach); library(doParallel); library(HMP); library(MCMCpack); library(
 set.seed(111)
 #Get number of threads from SLURM scheduler -- set in 'run_simu_cov.sh'
 threads = Sys.getenv("SLURM_CPUS_PER_TASK")
+iter = Sys.getenv("ITER")
+rep = Sys.getenv("REP")
 
-# I <- 100 ## sample size i.e., #subjects
-# K <- 4 ## number of cell categories
-# K1 = K-1 ## number of cell categories minus one (last one is baseline)
-# p <- 5 # number of covariates # larger p
+#Total counts
 e.total.mu = 10000 #Mean total number of events per subject
 e.total.sd = 10   #SD of total number of events per subject
 e.subset.mu = 3000 #Mean number of events per subject that are not in the Kth category (all negative set)
@@ -88,10 +87,6 @@ beta.selection.cutoff = 0.2
 pu.logmu = log(20)
 p.logsd = 0.01
 ps.logmu.diff = log(5)
-
-### COMPASScovariate
-iter = 100000
-rep = 10
 
 #Figure output
 out.dir = file.path("/work",
