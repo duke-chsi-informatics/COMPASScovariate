@@ -4,8 +4,6 @@ author: "Tyler Schappe"
 date: "2022-11-22"
 output: 
   html_document:
-    code_folding: hide
-  html_notebook:
     code_folding: show
     toc: true
     toc_float: true
