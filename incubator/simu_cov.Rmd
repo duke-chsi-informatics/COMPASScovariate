@@ -743,3 +743,33 @@ sim.stats %>%
   )
 ```
 
+## Extensions
+
+Two types of covariates -- patient characteristics and experimental design
+
+Want some cell subsets to be 0 when covariate (age) 
+
+HIV group (treatment group) -- more + gammas
+Young people -- less + gammas
+HIV group also have more young people so that without knowing (conditioning on age), there is no association with HIV group
+
+Don't include HIV in COMPASScovariate
+
+Treatment group (HIV): 
+
+- Larger sigma.beta
+- Larger cutoff value for beta selection
+- Outcome is vector of length I -- binary
+  + If gamma++ == 1, then outcome = 1; else outcome = 0
+
+
+0. Remove all other covariates
+1. Specify # of HIV+ and HIV-
+1. Sim with age and HIV
+  1. Age (X) | HIV+: Young --  rnorm(-1, 0.4) (plot values to see overlap)
+  2. Age (X) | HIV-: Old --    rnorm(1, 0.4)
+2. Run COMPASScovariate with just age
+3. Run original COMPASS
+4. Logistic regression to see if PFS scores are associated with HIV
+  1. COMPASScovariate PFS -- hope to be associated with HIV
+  2. COMPASS PFS -- hope to not be associated
