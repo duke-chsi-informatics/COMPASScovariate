@@ -11,7 +11,7 @@ export SINGULARITY_IMAGE="oras://gitlab-registry.oit.duke.edu/chsi-informatics/c
 export BIND_ARGS="--bind /work:/work"
 
 #Simulation arguments
-export ITER=10000
+export ITER=100000
 export REP=2
 export SIM_REP=5
 
