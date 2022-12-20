@@ -68,7 +68,7 @@ set.seed(111)
 #Get number of iter and reps from 'run_simu_cov.sh'
 iter = as.integer(Sys.getenv("ITER")) #Number of COMPASScovariate iterations per replicate
 rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
-sim.rep = 5 #Number of replicates per parameter combination
+sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter combination
 
 # iter = 1000 #Number of COMPASScovariate iterations per replicate
 # rep = 1     #Number of COMPASScovariate replicates
