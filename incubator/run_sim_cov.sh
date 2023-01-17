@@ -4,7 +4,7 @@
 #SBATCH -A chsi
 #SBATCH --time=08:00:00
 #SBATCH --mem-per-cpu=1G
-#SBATCH -c 25
+#SBATCH -c 16
 
 #Singularity container setup
 export SINGULARITY_IMAGE="oras://gitlab-registry.oit.duke.edu/chsi-informatics/containers/compasscovariate-singularity:v003"
