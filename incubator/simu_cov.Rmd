@@ -21,7 +21,7 @@ source("~/project_repos/COMPASScovariate/R/COMPASS-covariate.R")
 source("~/project_repos/COMPASScovariate/R/updatebeta.R")
 source("~/project_repos/COMPASScovariate/R/utils.R")
 
-library(foreach); library(doParallel); library(HMP); library(MCMCpack); library(devtools); library(ggplot2)
+library(foreach); library(doParallel); library(HMP); library(MCMCpack); library(devtools); library(ggplot2); library(tidyverse)
 
 # install.packages("MultiRNG")
 ```
@@ -103,6 +103,7 @@ sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter 
 
 # iter = 1000 #Number of COMPASScovariate iterations per replicate
 # rep = 1     #Number of COMPASScovariate replicates
+# sim.rep = 2
 
 #Total counts
 e.total.mu = 10000 #Mean total number of events per subject
@@ -146,11 +147,12 @@ dir.create(out.dir,
 ```{r}
 #Get number of threads from SLURM scheduler as # of CPUs allocated
 threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
+# threads = 2
 
 #Make a single df of all combinations of parameters
-sim.pars <- expand.grid(I = c(15, 30, 60, 100, 200),
-                        K = c(4),
-                        p = c(5)
+sim.pars <- expand.grid(I = c(30, 60, 100, 200),   #Number of subjects
+                        K = c(4),        #Number of unique cell subsets
+                        p = c(0)         #Number of covariations IN ADDITION TO AGE | HIV status
             )
 
 #Repeat the df to create replicates for each combination -- repeat 'sim.rep' times
@@ -169,14 +171,13 @@ sim.pars <- do.call('rbind', lapply(1:sim.rep, FUN = function(simrep) {
 cl <- makeCluster(threads)
 registerDoParallel(cl)
 
-sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS")) %dopar% {
+sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", "tidyr")) %dopar% {
 
   I <- sim.pars[s,]$I ## sample size i.e., #subjects; I = 30
   K <- sim.pars[s,]$K ## number of cell categories: K = 16
-  p <- sim.pars[s,]$p # number of covariates # larger p
+  p <- sim.pars[s,]$p + 1 # number of covariates # larger p
   sim_rep <- sim.pars[s,]$sim_rep
   K1 = K-1 ## number of cell categories minus one (last one is baseline)
-
   
   ### True Regression Coefs
   #Intercepts
@@ -400,18 +401,34 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS")) %dopar% 
   ########################
   
   #Create a version of X without an intercept column
-  X.mod = X[,-1]
+  X.mod = as.matrix(X[,-1])  #Use as.matrix to keep matrix format in case ncol(X.mod) = 1
   
   sim.fit = .COMPASS.covariate(n_s = n_s, 
                                n_u = n_u,
                                X = X.mod,
                                iterations = iter, 
-                               replication = rep)
+                               replication = rep
+  )
+  
+  #Coerce fit into output used in simpleCOMPASS.R
+  fit <- list(
+    fit=sim.fit,
+    data=list(
+      n_s=n_s,
+      n_u=n_u,
+      counts_s=rowSums(n_s),
+      counts_u=rowSums(n_u)
+      # categories=cats,
+      # meta=meta,
+      # individual_id=individual_id
+    )
+  )
+  class(fit) <- c("COMPASSResult")
   
   ###################
   ### Collect Results
   ###################
-  results.list <- list(sim.fit,
+  results.list <- list(fit,
                        gamma.m,
                        beta.true.final,
                        I,
@@ -467,6 +484,7 @@ lapply(sim.out.list, FUN = function(sim) {
                             paste(paste0("I:", I),
                                   paste0("K:", K),
                                   paste0("p:", p),
+                                  paste0("rep:", sim_rep),
                                   sep = "_"
                                   )
                                 )
@@ -481,7 +499,7 @@ lapply(sim.out.list, FUN = function(sim) {
   
   ###################################################################################
   ### Gamma
-  sim.fit.gamma <- apply(sim.fit$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))
+  sim.fit.gamma <- apply(sim.fit$fit$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))
   ## Percent correct
   percent.gamma.correct <-
     # paste(
@@ -497,15 +515,15 @@ lapply(sim.out.list, FUN = function(sim) {
   
   ##########################################################################################
   ### Betas
-  sim.fit.beta.median <- apply(sim.fit$beta, MARGIN = c(1,2), FUN = function(x) median(x))
+  sim.fit.beta.median <- apply(sim.fit$fit$beta, MARGIN = c(1,2), FUN = function(x) median(x))
   
   ##Coverage
   #Find 95% quantile intervals
-  lower.95 <- apply(sim.fit$beta, MARGIN = c(1,2), FUN = function(x) quantile(x,
+  lower.95 <- apply(sim.fit$fit$beta, MARGIN = c(1,2), FUN = function(x) quantile(x,
                                                                  prob = 0.025
                                                                  )
       )
-  upper.95 <- apply(sim.fit$beta, MARGIN = c(1,2), FUN = function(x) quantile(x,
+  upper.95 <- apply(sim.fit$fit$beta, MARGIN = c(1,2), FUN = function(x) quantile(x,
                                                                  prob = 0.975
                                                                  )
       )
@@ -530,7 +548,8 @@ lapply(sim.out.list, FUN = function(sim) {
           file = file.path(out.obj.dir.loop,
                            paste(paste0("I:", I),
                                  paste0("K:", K),
-                                 paste0("p:", p, ".RDS"),
+                                 paste0("p:", p),
+                                 paste0("rep:", sim_rep, ".RDS"),
                                  sep = "_"
                                 )
                            )
@@ -550,7 +569,7 @@ lapply(sim.out.list, FUN = function(sim) {
   #Loop over each k-1 cluster
   for (k in 1:K1) {
     #Extract a matrix of draws x coefficients for current cluster
-    cluster <- t(apply(sim.fit$beta, MARGIN = c(2,3), FUN = function(x) x[k]))
+    cluster <- t(apply(sim.fit$fit$beta, MARGIN = c(2,3), FUN = function(x) x[k]))
     
     #Make a dataframe for each covariate (column) with current cluster and covariate ID
     for (cov in 1:(p+1)) { #p+1 b/c of intercept
@@ -571,7 +590,7 @@ lapply(sim.out.list, FUN = function(sim) {
   #Check that rows of post.out match dimension of original beta draws
   post.out.dim.check <-
     dim(post.out)[1] ==
-      dim(sim.fit$beta)[1] * (dim(sim.fit$beta)[2]) * dim(sim.fit$beta)[3]
+      dim(sim.fit$fit$beta)[1] * (dim(sim.fit$fit$beta)[2]) * dim(sim.fit$fit$beta)[3]
 
   #Make cluster and covariate factors
   post.out$cluster <- as.factor(post.out$cluster)
@@ -590,8 +609,11 @@ lapply(sim.out.list, FUN = function(sim) {
   (
   #Number of unique betas excluding duplicated 0s
   length(unique(post.out$true.beta)) +
-    #Number of cluster-covariate combinations where true.beta is 0 minus 1 (b/c 1 true 0 already counted above)
-    length(unique(paste(post.out$cluster[post.out$true.beta == 0], post.out$covariate[post.out$true.beta == 0]))) - 1
+    #Number of cluster-covariate combinations where true.beta is 0 minus 1 (b/c 1 true 0 already counted above) (unless only 1 true 0)
+    ifelse(length(unique(paste(post.out$cluster[post.out$true.beta == 0], post.out$covariate[post.out$true.beta == 0]))) == 0,
+      length(unique(paste(post.out$cluster[post.out$true.beta == 0], post.out$covariate[post.out$true.beta == 0]))),
+      length(unique(paste(post.out$cluster[post.out$true.beta == 0], post.out$covariate[post.out$true.beta == 0]))) - 1
+    )
   ) ==
     #Equal to dimension of true beta (without intercept?)
     length(beta.true.final)
@@ -660,6 +682,7 @@ lapply(sim.out.list, FUN = function(sim) {
                                       paste0("I:", I),
                                       paste0("K:", K),
                                       paste0("p:", p),
+                                      paste0("rep:", sim_rep),
                                       sep = "_"
                                 ),
                                 ".pdf"
@@ -690,7 +713,7 @@ lapply(sim.out.list, FUN = function(sim) {
   if (length(beta.no.cover.coord.df) > 0) {
     lapply(1:length(beta.no.cover.coord.df), FUN = function(i) {
       #Extract the posterior samples for the current beta
-      post <- data.frame(samples = eval(parse(text = paste0("sim.fit$beta",
+      post <- data.frame(samples = eval(parse(text = paste0("sim.fit$fit$beta",
                                "[",
                                beta.no.cover.coord.df[i],
                                ",]"
@@ -751,6 +774,7 @@ lapply(sim.out.list, FUN = function(sim) {
                                           paste0("I:", I),
                                           paste0("K:", K),
                                           paste0("p:", p),
+                                          paste0("rep:", sim_rep),
                                           paste(
                                             "cluster",
                                             stringr::str_split(beta.no.cover.coord.df[i],
@@ -810,6 +834,7 @@ sim.stats %>%
   dplyr::group_by(I, K, p) %>%
   dplyr::summarize(
             iter = unique(iter),
+            N = n(),
             Percent.gamma.correct.mean = round(mean(Percent.gamma.correct), 2),
             Percent.gamma.correct.sd = round(sd(Percent.gamma.correct), 2),
             Percent.beta.95.coverage.mean = round(mean(Percent.beta.95.coverage), 2),
@@ -817,33 +842,22 @@ sim.stats %>%
   )
 ```
 
-## Extensions
+## Save Output
 
-Two types of covariates -- patient characteristics and experimental design
+```{r}
 
-Want some cell subsets to be 0 when covariate (age) 
-
-HIV group (treatment group) -- more + gammas
-Young people -- less + gammas
-HIV group also have more young people so that without knowing (conditioning on age), there is no association with HIV group
-
-Don't include HIV in COMPASScovariate
-
-Treatment group (HIV): 
-
-- Larger sigma.beta
-- Larger cutoff value for beta selection
-- Outcome is vector of length I -- binary
-  + If gamma++ == 1, then outcome = 1; else outcome = 0
+```
 
 
-0. Remove all other covariates
-1. Specify # of HIV+ and HIV-
-1. Sim with age and HIV
-  1. Age (X) | HIV+: Young --  rnorm(-1, 0.4) (plot values to see overlap)
-  2. Age (X) | HIV-: Old --    rnorm(1, 0.4)
-2. Run COMPASScovariate with just age
-3. Run original COMPASS
-4. Logistic regression to see if PFS scores are associated with HIV
-  1. COMPASScovariate PFS -- hope to be associated with HIV
-  2. COMPASS PFS -- hope to not be associated
+## Save Polyfunctional Scores
+
+**TO DO:** Need to work out how to extract polyfunctionality scores from fit via .COMPASS.covariate
+
+- Modify COMPASS function to use COMPASS.covariate?
+
+```{r}
+getCounts(sim.out.list[[1]]$sim.fit)
+
+# PolyfunctionalityScore(sim.out.list[[1]]$sim.fit)
+```
+
