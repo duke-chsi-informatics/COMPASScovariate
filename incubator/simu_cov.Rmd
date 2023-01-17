@@ -42,6 +42,37 @@ library(foreach); library(doParallel); library(HMP); library(MCMCpack); library(
 2) Different number of total events and event subsets for stim and unstim samples
 3) Smaller percentage of gamma = 1
 
+**Notes from meeting on 12/21/22**
+
+Two types of covariates -- patient characteristics and experimental design
+
+Want some cell subsets to be 0 when covariate (age) 
+
+HIV group (treatment group) -- more + gammas
+Young people -- less + gammas
+HIV group also have more young people so that without knowing (conditioning on age), there is no association with HIV group
+
+Don't include HIV in COMPASScovariate
+
+Treatment group (HIV): 
+
+- Larger sigma.beta
+- Larger cutoff value for beta selection
+- Outcome is vector of length I -- binary
+  + If gamma++ == 1, then outcome = 1; else outcome = 0
+
+
+0. Remove all other covariates
+1. Specify # of HIV+ and HIV-
+1. Sim with age and HIV
+  1. Age (X) | HIV+: Young --  rnorm(-1, 0.4) (plot values to see overlap)
+  2. Age (X) | HIV-: Old --    rnorm(1, 0.4)
+2. Run COMPASScovariate with just age
+3. Run original COMPASS
+4. Logistic regression to see if PFS scores are associated with HIV
+  1. COMPASScovariate PFS -- hope to be associated with HIV
+  2. COMPASS PFS -- hope to not be associated
+
 
 ## Simulate Data and Run COMPASScovariate
 
@@ -85,6 +116,12 @@ beta.sigma = 0.8
 int.mu = 0
 int.sd = 0.1
 beta.selection.cutoff = 0.2
+
+#HIV+ and HIV- subjects
+prob.hiv.pos = 0.5
+age.mean.hiv.neg = 1
+age.mean.hiv.pos = -1
+age.sd = 0.5
 
 ### Pu and Ps
 #Concentration params drawn from lognormal
@@ -161,16 +198,53 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS")) %dopar% 
   #Bind intercept betas to other betas
   beta.true.final <- cbind(int.true, beta.true.selection)
   
-  #Make covariates
-  X <- cbind(
-        #First column is 1s for intercept
-        rep(1, I*1),
-        #Remainder are for covariates
-        matrix(rnorm(n = I*p), 
-              ncol = p, 
-              nrow = I
-        )
+  ###Make covariates
+  #Add int and HIV status
+  covar <- data.frame(
+                  #First column is 1s for intercept
+                  int = rep(1, I*1),
+                  #HIV status
+                  hiv = sample(c(0, 1), size = I, replace = T, prob = c(prob.hiv.pos, 1-prob.hiv.pos)),
+                  #Age
+                  age = rep(NA, I)
   )
+  
+  #Add remainder of covariates if any
+  if (p > 1) {
+    covar <- cbind(covar,
+                   matrix(rnorm(n = I),
+                         ncol = p-1,
+                         nrow = I,
+                         dimnames = list(NULL, paste0("V", 2:(p)))
+                  )
+    )
+  }
+  
+  #Add age | HIV
+  covar <- covar %>%
+            mutate(age = replace(age, hiv == 0, rnorm(n = sum(hiv == 0), 
+                                                     mean = age.mean.hiv.neg, 
+                                                     sd = age.sd
+                                                     )
+                                 ),
+                   age = replace(age, hiv == 1, rnorm(n = sum(hiv == 1),
+                                                     mean = age.mean.hiv.pos,
+                                                     sd = age.sd
+                                                     )
+                                 )
+            )
+  #Plot age | HIV
+  # covar %>%
+  #   ggplot(aes(x = age,
+  #              fill = as.factor(hiv))
+  #   )+
+  #   geom_density(alpha = 0.7)+
+  #   theme_bw()
+  
+  #Matrix matrix version without HIV status
+  X = covar %>%
+        dplyr::select(-hiv) %>%
+        as.matrix()
   
   ### True Gamma Matrix
   #Generate omega_ik -- probability that gamma_ik = 1
