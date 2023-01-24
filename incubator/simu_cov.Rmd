@@ -854,13 +854,17 @@ sim.stats %>%
 
 ## Save Polyfunctional Scores
 
-**TO DO:** Need to work out how to extract polyfunctionality scores from fit via .COMPASS.covariate
-
-- Modify COMPASS function to use COMPASS.covariate?
 
 ```{r}
-getCounts(sim.out.list[[1]]$sim.fit)
-
-# PolyfunctionalityScore(sim.out.list[[1]]$sim.fit)
+lapply(sim.out.list, FUN = function(fit) {
+  if(fit$sim_rep == 1) {
+    temp <- fit$sim.fit$data$meta
+    temp$pfs <- PolyfunctionalityScore(fit$sim.fit)
+    
+    glm.fit <- glm(hiv ~ pfs, data = temp, family = binomial)
+    
+    return(summary(glm.fit))
+  }
+})
 ```
 
