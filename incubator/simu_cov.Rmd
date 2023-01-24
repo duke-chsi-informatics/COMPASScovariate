@@ -903,19 +903,57 @@ sim.stats %>%
 ```
 
 
-## Save Polyfunctional Scores
-
+## Logistic Regression with PFS
 
 ```{r}
-lapply(sim.out.list, FUN = function(fit) {
-  if(fit$sim_rep == 1) {
-    temp <- fit$sim.fit$data$meta
-    temp$pfs <- PolyfunctionalityScore(fit$sim.fit)
-    
-    glm.fit <- glm(hiv ~ pfs, data = temp, family = binomial)
-    
-    return(summary(glm.fit))
-  }
-})
+log.reg.PFS <- 
+  do.call('rbind',
+    lapply(sim.out.list, FUN = function(fit) {
+        #Extract covariates from  metadata
+        temp <- fit$sim.fit$data$meta
+        
+        #Add polyfunctional scores from COMPASScovariate and COMPASS
+        temp$compass.cov.pfs <- PolyfunctionalityScore(fit$sim.fit)
+        temp$compass.pfs <- PolyfunctionalityScore(fit$compass.fit$fit)
+        
+        #Run logistic regressions for COMPASScovariate and COMPASS
+        logreg.compass.cov <- summary(glm(hiv ~ compass.cov.pfs, data = temp, family = binomial))
+        logreg.compass <- summary(glm(hiv ~ compass.pfs, data = temp, family = binomial))
+        
+        #Collect model output
+        logreg.output <-
+          bind_rows(
+            logreg.compass.cov$coefficients %>%
+              data.frame() %>%
+              tibble::rownames_to_column(var = "Model") %>%
+              filter(Model == "compass.cov.pfs") %>%
+              mutate(Model = replace(Model, Model == "compass.cov.pfs", "COMPASScov")) %>%
+              select(Model, Estimate, Pr...z..),
+            logreg.compass$coefficients %>%
+              data.frame() %>%
+              tibble::rownames_to_column(var = "Model") %>%
+              filter(Model == "compass.pfs") %>%
+              mutate(Model = replace(Model, Model == "compass.pfs", "COMPASS")) %>%
+              select(Model, Estimate, Pr...z..)
+          ) %>%
+          mutate(I = fit$I,
+                 K = fit$K,
+                 p = fit$p,
+                 rep = fit$sim_rep
+          )
+        
+        return(logreg.output)
+    })
+  )
+```
+
+Display results
+```{r}
+log.reg.PFS %>%
+  group_by(I, K, p, rep) %>%
+  summarize(Model = Model,
+            Estimate = Estimate,
+            Pvalue = Pr...z..
+  )
 ```
 
