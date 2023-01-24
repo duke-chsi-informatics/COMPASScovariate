@@ -97,13 +97,13 @@ Treatment group (HIV):
 ```{r}
 set.seed(111)
 #Get number of iter and reps from 'run_simu_cov.sh'
-# iter = as.integer(Sys.getenv("ITER")) #Number of COMPASScovariate iterations per replicate
-# rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
-# sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter combination
+iter = as.integer(Sys.getenv("ITER")) #Number of COMPASScovariate iterations per replicate
+rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
+sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter combination
 
-iter = 1000 #Number of COMPASScovariate iterations per replicate
-rep = 1     #Number of COMPASScovariate replicates
-sim.rep = 2
+# iter = 10000 #Number of COMPASScovariate iterations per replicate
+# rep = 1     #Number of COMPASScovariate replicates
+# sim.rep = 2
 
 #Total counts
 e.total.mu = 10000 #Mean total number of events per subject
@@ -146,8 +146,8 @@ dir.create(out.dir,
 
 ```{r}
 #Get number of threads from SLURM scheduler as # of CPUs allocated
-# threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
-threads = 2
+threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
+# threads = 2
 
 #Make a single df of all combinations of parameters
 sim.pars <- expand.grid(I = c(30, 60, 100, 200),   #Number of subjects
