@@ -398,6 +398,17 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   
   ## Add colnames
   colnames(n_s) = 1:K
+  colnames(n_u) = 1:K
+  
+  ## Add rownames
+  rownames(n_s) = 1:I
+  rownames(n_u) = 1:I
+  
+  ## Make metadata for COMPASS
+  metadat <- 
+    covar %>%
+    select(-int) %>%
+    mutate(sample.id = rownames(.))
   
   ########################
   ### Run COMPASScovariate
@@ -406,6 +417,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   #Create a version of X without an intercept column
   X.mod = as.matrix(X[,-1])  #Use as.matrix to keep matrix format in case ncol(X.mod) = 1
   
+  #COMPASScovariate
   .fit = .COMPASS.covariate(n_s = n_s, 
                             n_u = n_u,
                             X = X.mod,
@@ -413,7 +425,16 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
                             replication = rep
   )
   
-  #Coerce fit into output used in simpleCOMPASS.R
+  #COMPASS
+  .compass_fit = SimpleCOMPASS(n_s = n_s,
+                               n_u = n_u,
+                               meta = metadat,
+                               individual_id = "sample.id",
+                               iterations = iter,
+                               replications = rep
+  )
+  
+  ###Coerce fit into output used in simpleCOMPASS.R
   fit <- list(
     fit=.fit,
     data=list(
@@ -428,10 +449,25 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   )
   class(fit) <- c("COMPASSResult")
   
+  compass.fit <- list(
+    fit = .compass_fit,
+    data=list(
+      n_s=n_s,
+      n_u=n_u,
+      counts_s=rowSums(n_s),
+      counts_u=rowSums(n_u),
+      categories=.compass_fit$categories,
+      meta=covar
+      # individual_id=individual_id
+    )
+  )
+  class(compass.fit) <- c("COMPASSResult")
+  
   ###################
   ### Collect Results
   ###################
   results.list <- list(fit,
+                       compass.fit,
                        gamma.m,
                        beta.true.final,
                        I,
@@ -442,6 +478,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   )
   
   names(results.list) <- c('sim.fit',
+                           'compass.fit',
                            'gamma.m',
                            'beta.true.final',
                            'I',
@@ -479,6 +516,7 @@ lapply(sim.out.list, FUN = function(sim) {
   p <- sim$p
   sim_rep <- sim$sim_rep
   sim.fit <- sim$sim.fit
+  compass.fit <- sim$compass.fit
   gamma.m <- sim$gamma.m
   beta.true.final <- sim$beta.true.final
   
@@ -514,7 +552,15 @@ lapply(sim.out.list, FUN = function(sim) {
       # )
     )
   
-  
+  #########Compass
+  compass.fit.gamma <- apply(compass.fit$fit$fit$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))
+  ##Percent COMPASS correct
+  percent.gamma.correct.compass <-
+    round(
+        sum(gamma.m == compass.fit.gamma[,-ncol(compass.fit.gamma)]) /
+          (dim(gamma.m)[1] * dim(gamma.m)[2]) * 100,
+        digits = 2
+    )
   
   ##########################################################################################
   ### Betas
@@ -542,6 +588,8 @@ lapply(sim.out.list, FUN = function(sim) {
         2
       # )
     )
+  
+  
   
   ##################
   ## Save Fit Object
@@ -814,6 +862,7 @@ lapply(sim.out.list, FUN = function(sim) {
                     Reps = rep,
                     Simulation.replicate = sim_rep,
                     Percent.gamma.correct = percent.gamma.correct,
+                    percent.gamma.correct.compass = percent.gamma.correct.compass,
                     Percent.beta.95.coverage = percent.beta.coverage,
                     Post.out.check = post.out.dim.check,
                     True.beta.check = true.beta.check
@@ -839,7 +888,9 @@ sim.stats %>%
             iter = unique(iter),
             N = n(),
             Percent.gamma.correct.mean = round(mean(Percent.gamma.correct), 2),
+            Percent.gamma.correct.COMPASS.mean = round(mean(percent.gamma.correct.compass), 2),
             Percent.gamma.correct.sd = round(sd(Percent.gamma.correct), 2),
+            Percent.gamma.correct.COMPASS.sd = round(sd(percent.gamma.correct.compass), 2),
             Percent.beta.95.coverage.mean = round(mean(Percent.beta.95.coverage), 2),
             Percent.beta.95.coverage.sd = round(sd(Percent.beta.95.coverage), 2)
   )
