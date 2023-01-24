@@ -3,7 +3,7 @@
 #SBATCH -p chsi
 #SBATCH -A chsi
 #SBATCH --time=08:00:00
-#SBATCH --mem-per-cpu=1G
+#SBATCH --mem-per-cpu=4G
 #SBATCH -c 16
 
 #Singularity container setup
