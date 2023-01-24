@@ -219,18 +219,38 @@
 
   vmessage("Done!")
 
-  cats <- categories[, - ncol(categories), drop = FALSE]
-  subsets_df <- as.data.frame(cats)
-  for (i in seq_along(subsets_df)) {
-    tmp <- subsets_df[[i]]
-    subsets_df[[i]] <- paste0(
-      swap(tmp, c(0, 1), c("!", "")),
-      colnames(subsets_df)[[i]]
-    )
-  }
-  subsets <- do.call(function(...) paste(..., sep = "&"), subsets_df)
+  ###
+  ## Guess the marker names
+  marker_names <- unique(
+    unlist( strsplit( gsub("!", "", colnames(n_s)), "&", fixed=TRUE ) )
+  )
+  n_markers <- length(marker_names)
+  cats <- as.data.frame( matrix(0, nrow=ncol(n_s), ncol=n_markers) )
+  rownames(cats) <- colnames(n_s)
+  colnames(cats) = marker_names
 
-  colnames(Mgamma) <- subsets
+  for (i in seq_along(cats)) {
+    #cats[, i] <- as.integer(grepl( paste0( colnames(cats)[i], "+" ), rownames(cats), fixed=TRUE ))
+    cats[,i] <-
+      as.integer(!grepl(paste0("!",colnames(cats)[i],"(&|$)+"),rownames(cats),fixed =
+                          FALSE))
+  }
+  cats$Counts <- apply(cats, 1, sum)
+  cats <- as.matrix(cats)
+  ###
+
+  # cats <- categories[, - ncol(categories), drop = FALSE]
+  # subsets_df <- as.data.frame(cats)
+  # for (i in seq_along(subsets_df)) {
+  #   tmp <- subsets_df[[i]]
+  #   subsets_df[[i]] <- paste0(
+  #     swap(tmp, c(0, 1), c("!", "")),
+  #     colnames(subsets_df)[[i]]
+  #   )
+  # }
+  # subsets <- do.call(function(...) paste(..., sep = "&"), subsets_df)
+  #
+  # colnames(Mgamma) <- subsets
 
 
   ## set names on the output
@@ -243,7 +263,7 @@
     gamma=gamma,
     mean_gamma=Mgamma,
     A_gamma=rowMeans(A_gm),
-    categories = categories,
+    categories = cats,
     model="covariate"
   )
 

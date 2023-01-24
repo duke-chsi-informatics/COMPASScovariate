@@ -97,13 +97,13 @@ Treatment group (HIV):
 ```{r}
 set.seed(111)
 #Get number of iter and reps from 'run_simu_cov.sh'
-iter = as.integer(Sys.getenv("ITER")) #Number of COMPASScovariate iterations per replicate
-rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
-sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter combination
+# iter = as.integer(Sys.getenv("ITER")) #Number of COMPASScovariate iterations per replicate
+# rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
+# sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter combination
 
-# iter = 1000 #Number of COMPASScovariate iterations per replicate
-# rep = 1     #Number of COMPASScovariate replicates
-# sim.rep = 2
+iter = 1000 #Number of COMPASScovariate iterations per replicate
+rep = 1     #Number of COMPASScovariate replicates
+sim.rep = 2
 
 #Total counts
 e.total.mu = 10000 #Mean total number of events per subject
@@ -146,8 +146,8 @@ dir.create(out.dir,
 
 ```{r}
 #Get number of threads from SLURM scheduler as # of CPUs allocated
-threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
-# threads = 2
+# threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
+threads = 2
 
 #Make a single df of all combinations of parameters
 sim.pars <- expand.grid(I = c(30, 60, 100, 200),   #Number of subjects
@@ -396,6 +396,9 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
     #                                                             )
   }
   
+  ## Add colnames
+  colnames(n_s) = 1:K
+  
   ########################
   ### Run COMPASScovariate
   ########################
@@ -403,23 +406,23 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   #Create a version of X without an intercept column
   X.mod = as.matrix(X[,-1])  #Use as.matrix to keep matrix format in case ncol(X.mod) = 1
   
-  sim.fit = .COMPASS.covariate(n_s = n_s, 
-                               n_u = n_u,
-                               X = X.mod,
-                               iterations = iter, 
-                               replication = rep
+  .fit = .COMPASS.covariate(n_s = n_s, 
+                            n_u = n_u,
+                            X = X.mod,
+                            iterations = iter, 
+                            replication = rep
   )
   
   #Coerce fit into output used in simpleCOMPASS.R
   fit <- list(
-    fit=sim.fit,
+    fit=.fit,
     data=list(
       n_s=n_s,
       n_u=n_u,
       counts_s=rowSums(n_s),
-      counts_u=rowSums(n_u)
-      # categories=cats,
-      # meta=meta,
+      counts_u=rowSums(n_u),
+      categories=.fit$categories,
+      meta=covar
       # individual_id=individual_id
     )
   )
@@ -453,7 +456,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
 stopCluster(cl)
 ```
 
-
+**Notes on including cats**
 
 
 ## Compare Estimates to True
