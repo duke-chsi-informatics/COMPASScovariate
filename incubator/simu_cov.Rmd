@@ -1,0 +1,959 @@
+---
+title: "COMPASScovariate Test Simulations"
+author: "Tyler Schappe"
+date: "2022-11-22"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Build COMPASScovariate package
+devtools::load_all("..")
+
+#Source for now but will want to call using COMPASS.R eventually
+source("~/project_repos/COMPASScovariate/R/COMPASS-covariate.R")
+source("~/project_repos/COMPASScovariate/R/updatebeta.R")
+source("~/project_repos/COMPASScovariate/R/utils.R")
+
+library(foreach); library(doParallel); library(HMP); library(MCMCpack); library(devtools); library(ggplot2); library(tidyverse)
+
+# install.packages("MultiRNG")
+```
+
+## Notes
+
+**Note on iterations:** Keep only the last X iterations and use the first ones to warm up chains.
+
+**12/13/22 To Do:**
+
+- Create density plot of posterior for betas that have a large difference between estimated and true.
+- Reduce to 2 markers = 4 cell subsets
+- Modify covariates (intercept) to allow ~ 50% of gammas to be 1
+
+### Additional Complexities
+
+1) Smaller difference in concentration parameters between stim and unstim
+2) Different number of total events and event subsets for stim and unstim samples
+3) Smaller percentage of gamma = 1
+
+**Notes from meeting on 12/21/22**
+
+Two types of covariates -- patient characteristics and experimental design
+
+Want some cell subsets to be 0 when covariate (age) 
+
+HIV group (treatment group) -- more + gammas
+Young people -- less + gammas
+HIV group also have more young people so that without knowing (conditioning on age), there is no association with HIV group
+
+Don't include HIV in COMPASScovariate
+
+Treatment group (HIV): 
+
+- Larger sigma.beta
+- Larger cutoff value for beta selection
+- Outcome is vector of length I -- binary
+  + If gamma++ == 1, then outcome = 1; else outcome = 0
+
+
+0. Remove all other covariates
+1. Specify # of HIV+ and HIV-
+1. Sim with age and HIV
+  1. Age (X) | HIV+: Young --  rnorm(-1, 0.4) (plot values to see overlap)
+  2. Age (X) | HIV-: Old --    rnorm(1, 0.4)
+2. Run COMPASScovariate with just age
+3. Run original COMPASS
+4. Logistic regression to see if PFS scores are associated with HIV
+  1. COMPASScovariate PFS -- hope to be associated with HIV
+  2. COMPASS PFS -- hope to not be associated
+
+
+## Simulate Data and Run COMPASScovariate
+
+**Approach**
+
+1) Matrix of true betas for each k-1 subset for each covariate p ~ Normal(beta.mu, beta.sigma)
+    a) Model selection where any beta where |beta| < beta.selection.cutoff -> 0
+2) Vector of true intercepts for each k-1 subset ~ Normal(int.mu, int.sd)
+    a) int.mu is 0 to keep probability that gamma = 1 ~ 50%, which makes estimating betas easier.
+3) Matrix X (I x p) of covariates with first column of 1's for intercept
+4) Omega (I x K1): For each sample, for each subset, generate linear predictor as linear combination of sample's covariate values X[i,] and subset-specific true betas beta.true.final[k,]
+5) gamma.m (I x K1): For each sample, for each subset, map linear predictor to probability using inverse-logit function
+6) Generate unstimulated and stimulated counts from a Dirichlet-Multinomial distribution where the concentration parameters are drawn from a lognormal distribution with same logmean and logsd values.
+    a) For stimulated cluster-samples (where gamma = 1), shift the logmean by ps.logmu.diff to increase the concentration parameter by exp(ps.logmu.diff).
+    b) For each sample, number of stimulated and unstimulated counts ~ Normal(e.total.mu, e.total.sd). This is the total number of stim and unstim counts for each sample.
+    c) For both stimluated and unstimulated, use Dirichlet-Multinomial to draw subset of stimulated and unstimulated counts ~ Normal(e.mu, e.sd). This is the number of stim and unstim counts for all K subsets. **Note:** The values of the concentration parameter can be interpreted as prior pseudo-counts and thus determine the variance among categories. Use high concentration parameter values to reduce the variance in counts among categories in resulting draws.
+    d) **Important:** The Kth category is included in the draws, but has a very large concentration parameter compared to rest of the categories so that the number of counts is much larger. This is to mimic real flow data where the majority of cells are in the "all negative" subset (ie. they don't belong to any of the mutually exclusive categories created by the markers of interest). We include this category because otherwise additional counts for a stimulated cell subset take away counts from only the k - 1 markers, resulting in significantly reduced counts for them (Lynn's original method). Here, the counts for the stimulated cell subset are "taken" from all other subsets with probability proportionate to the concentration parameters. Since the kth subset is given such a high concentration, it is much more likely that the counts are "taken" from that category, thus allowing the counts for the k - 1 subsets to remain constant (with some noise) between unstim and stim samples if they are not truely stimulated. 
+  
+
+### Set Fixed Parameters
+
+```{r}
+set.seed(111)
+#Get number of iter and reps from 'run_simu_cov.sh'
+iter = as.integer(Sys.getenv("ITER")) #Number of COMPASScovariate iterations per replicate
+rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
+sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter combination
+
+# iter = 10000 #Number of COMPASScovariate iterations per replicate
+# rep = 1     #Number of COMPASScovariate replicates
+# sim.rep = 2
+
+#Total counts
+e.total.mu = 10000 #Mean total number of events per subject
+e.total.sd = 10   #SD of total number of events per subject
+e.subset.mu = 3000 #Mean number of events per subject that are not in the Kth category (all negative set)
+e.subset.sd = 5   #SD of number of events per subject that are not in the Kth category (all negative set)
+
+#Betas
+beta.mu = 0
+beta.sigma = 0.8
+int.mu = 0
+int.sd = 0.1
+beta.selection.cutoff = 0.2
+
+#HIV+ and HIV- subjects
+prob.hiv.pos = 0.5
+age.mean.hiv.neg = 1
+age.mean.hiv.pos = -1
+age.sd = 0.5
+
+### Pu and Ps
+#Concentration params drawn from lognormal
+pu.logmu = log(20)
+p.logsd = 0.01
+ps.logmu.diff = log(5)
+
+#Figure output
+out.dir = file.path("/work",
+                        Sys.getenv("USER"),
+                        "COMPASScovariate-sim",
+                        "output"
+)
+dir.create(out.dir,
+           showWarnings = FALSE,
+           recursive = TRUE
+)
+```
+
+### Generate combinations of simulation parameters
+
+```{r}
+#Get number of threads from SLURM scheduler as # of CPUs allocated
+threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
+# threads = 2
+
+#Make a single df of all combinations of parameters
+sim.pars <- expand.grid(I = c(30, 60, 100, 200),   #Number of subjects
+                        K = c(4),        #Number of unique cell subsets
+                        p = c(0)         #Number of covariations IN ADDITION TO AGE | HIV status
+            )
+
+#Repeat the df to create replicates for each combination -- repeat 'sim.rep' times
+sim.pars <- do.call('rbind', lapply(1:sim.rep, FUN = function(simrep) {
+  data.frame(
+    sim_rep = simrep,
+    sim.pars
+  )
+  })
+)
+```
+
+### Run Simulation
+
+```{r}
+cl <- makeCluster(threads)
+registerDoParallel(cl)
+
+sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", "tidyr")) %dopar% {
+
+  I <- sim.pars[s,]$I ## sample size i.e., #subjects; I = 30
+  K <- sim.pars[s,]$K ## number of cell categories: K = 16
+  p <- sim.pars[s,]$p + 1 # number of covariates # larger p
+  sim_rep <- sim.pars[s,]$sim_rep
+  K1 = K-1 ## number of cell categories minus one (last one is baseline)
+  
+  ### True Regression Coefs
+  #Intercepts
+  int.true = rnorm(n = K1,
+                   mean = int.mu,
+                   sd = int.sd
+                   )
+  
+  #Covariate betas
+  beta.true = matrix(rnorm(n = K1*(p),
+                           mean = beta.mu, 
+                           sd = beta.sigma), 
+                     nrow = K1
+                    )
+
+  #Variable selection -- if |true beta| < 0.5, then true beta = 0
+  beta.true.selection = apply(beta.true, MARGIN = c(1,2), FUN = function(x) ifelse(abs(x) < beta.selection.cutoff, 0, x))
+
+  #Bind intercept betas to other betas
+  beta.true.final <- cbind(int.true, beta.true.selection)
+  
+  ###Make covariates
+  #Add int and HIV status
+  covar <- data.frame(
+                  #First column is 1s for intercept
+                  int = rep(1, I*1),
+                  #HIV status
+                  hiv = sample(c(0, 1), size = I, replace = T, prob = c(prob.hiv.pos, 1-prob.hiv.pos)),
+                  #Age
+                  age = rep(NA, I)
+  )
+  
+  #Add remainder of covariates if any
+  if (p > 1) {
+    covar <- cbind(covar,
+                   matrix(rnorm(n = I),
+                         ncol = p-1,
+                         nrow = I,
+                         dimnames = list(NULL, paste0("V", 2:(p)))
+                  )
+    )
+  }
+  
+  #Add age | HIV
+  covar <- covar %>%
+            mutate(age = replace(age, hiv == 0, rnorm(n = sum(hiv == 0), 
+                                                     mean = age.mean.hiv.neg, 
+                                                     sd = age.sd
+                                                     )
+                                 ),
+                   age = replace(age, hiv == 1, rnorm(n = sum(hiv == 1),
+                                                     mean = age.mean.hiv.pos,
+                                                     sd = age.sd
+                                                     )
+                                 )
+            )
+  #Plot age | HIV
+  # covar %>%
+  #   ggplot(aes(x = age,
+  #              fill = as.factor(hiv))
+  #   )+
+  #   geom_density(alpha = 0.7)+
+  #   theme_bw()
+  
+  #Matrix matrix version without HIV status
+  X = covar %>%
+        dplyr::select(-hiv) %>%
+        as.matrix()
+  
+  ### True Gamma Matrix
+  #Generate omega_ik -- probability that gamma_ik = 1
+  
+  #  1. p covariates from subject i x betas for p coefficients for cluster k gives linear predictor for cluster k in subject i
+  #  2. Inverse-logit transform linear predictor to obtain prob that gamma = 1 (true diff between stim and unstim) for cluster k in subject i
+  
+  #Empty matrix to hold omega
+  omega <- matrix(NA,
+                  nrow = I,
+                  ncol = K1
+                  )
+  
+  #Empty matrix to hold gamma
+  gamma.m <- matrix(NA,
+                       nrow = I,
+                       ncol = K1
+                       )
+  
+  for (i in 1:I) {
+    for (k in 1:K1) {
+      #Generate linear predictor and prob via inverse link
+      omega[i,k] <- binomial()$linkinv(X[i, ] %*% beta.true.final[k,]) #p covariates from ith subject x betas for p coefficients for kth cluster gives linear predictor
+      
+      #Generate gamma as Bernoulli RV with probs from omega
+      gamma.m[i,k] <- rbinom(n = 1,
+                             size = 1,
+                             prob = omega[i,k]
+                             )
+    }
+  }
+  
+  
+  ### True Counts
+  #Empty matrices for stim and unstim counts. **Note:** Create K columns with 0s, not K - 1
+  n_u <- matrix(0,
+                nrow = I,
+                ncol = K)
+  
+  n_s <- matrix(0,
+                nrow = I,
+                ncol = K)
+  
+  #### Unstimulated
+  ##Generate unstimulated count values for each subject
+  #Generate total counts
+  Nu = ceiling(
+        rnorm(mean = e.total.mu, 
+              sd = e.total.sd,
+              n = I)
+  )
+  
+  Nu.subset = ceiling(
+                rnorm(mean = e.subset.mu, 
+                      sd = e.subset.sd,
+                      n = I
+                ) 
+  )
+  
+  ##Loop over each sample and do two things:
+  
+  #  1. Create a vector of length K - 1 (not K) of concentration parameters drawn from a lognormal distribution with an unstimulated-specific log-mean.
+  #  2. Using the vector of concentration parameters, draw a vector of counts of length K - 1 (not K) from a Dirichlet-Multinomial distribution and fill the first K - 1 columns of the ith row of n_u
+  
+  #Notes:
+  
+  # - Leave the last column as 0 for all negative cell subset
+  # - Use Nu instead of Nu.subset because now Kth category included in DM-generated data
+  
+  concentration_u = matrix(NA,
+                           nrow = I,
+                           ncol = K
+                    )
+  
+  for (i in 1:I) {
+    concentration_u[i,1:K1] = rlnorm(n = K1, 
+                   meanlog = (pu.logmu), 
+                   sdlog = p.logsd
+    )
+    
+    concentration_u[i,K] = rlnorm(n = 1,
+                                  meanlog = pu.logmu*3,
+                                  sdlog = p.logsd
+    )
+    #HMP version
+    n_u[i,1:K] = t(matrix(HMP::Dirichlet.multinomial(Nrs = Nu[i], shape = concentration_u[i,])))
+    
+    # #MultiRNG version
+    # n_u[i,1:K] = MultiRNG::draw.dirichlet.multinomial(N = Nu[i],                    #Total counts
+    #                                                        no.row = 1,                      #Sample size
+    #                                                        d = length(concentration_u[i,]), #Number of categories (same as length of concentration vector)
+    #                                                        alpha = concentration_u[i,],     #Concentration vector
+    #                                                        beta = 1                         #Common shape parameter
+    #                                                             )
+  }
+  
+  #### Stimulated
+  ##Generate stimulated count values for each subject
+  #Generate total counts
+  Ns = ceiling(
+        rnorm(mean = e.total.mu, 
+              sd = e.total.sd,
+              n = I)
+  )
+  
+  Ns.subset = ceiling(
+                rnorm(mean = e.subset.mu, 
+                      sd = e.subset.sd,
+                      n = I
+                ) 
+  )
+  
+  ##Loop over each sample and do two things:
+  
+  #  1. Create a vector of length K - 1 (not K) of concentration parameters drawn from a lognormal distribution with an unstimulated-specific log-mean.
+  #  2. Using the vector of concentration parameters, draw a vector of counts of length K - 1 (not K) from a Dirichlet-Multinomial distribution and fill the first K - 1 columns of the ith row of n_u
+  
+  #Notes:
+  
+  #  - Leave the last column as 0
+  #  - Concentration is shifted by ps.logmu.diff if gamma = 1
+  #  - Use Nu instead of Nu.subset because now Kth category included in DM-generated data
+  
+  concentration_s = matrix(NA,
+                           nrow = I,
+                           ncol = K
+                    )
+  
+  for (i in 1:I) {
+    concentration_s[i, 1:K1] = rlnorm(n = K1, 
+                   meanlog = (pu.logmu + ps.logmu.diff * gamma.m[i, ]), 
+                   sdlog = p.logsd
+    )
+    
+    concentration_s[i, K] = rlnorm(n = 1,
+                                  meanlog = pu.logmu*3,
+                                  sdlog = p.logsd
+    )
+    #HMP version
+    n_s[i,1:K] = t(matrix(HMP::Dirichlet.multinomial(Nrs = Ns[i], shape = concentration_s[i,])))
+    
+    # #MultiRNG version
+    # n_s[i,1:K] = MultiRNG::draw.dirichlet.multinomial(N = Ns[i],                #Total counts
+    #                                                    no.row = 1,                      #Sample size
+    #                                                    d = length(concentration_s[i,]), #Number of categories (same as length of concentration vector)
+    #                                                    alpha = concentration_s[i,],     #Concentration vector
+    #                                                    beta = 1                         #Common shape parameter
+    #                                                             )
+  }
+  
+  ## Add colnames
+  colnames(n_s) = 1:K
+  colnames(n_u) = 1:K
+  
+  ## Add rownames
+  rownames(n_s) = 1:I
+  rownames(n_u) = 1:I
+  
+  ## Make metadata for COMPASS
+  metadat <- 
+    covar %>%
+    select(-int) %>%
+    mutate(sample.id = rownames(.))
+  
+  ########################
+  ### Run COMPASScovariate
+  ########################
+  
+  #Create a version of X without an intercept column
+  X.mod = as.matrix(X[,-1])  #Use as.matrix to keep matrix format in case ncol(X.mod) = 1
+  
+  #COMPASScovariate
+  .fit = .COMPASS.covariate(n_s = n_s, 
+                            n_u = n_u,
+                            X = X.mod,
+                            iterations = iter, 
+                            replication = rep
+  )
+  
+  #COMPASS
+  .compass_fit = SimpleCOMPASS(n_s = n_s,
+                               n_u = n_u,
+                               meta = metadat,
+                               individual_id = "sample.id",
+                               iterations = iter,
+                               replications = rep
+  )
+  
+  ###Coerce fit into output used in simpleCOMPASS.R
+  fit <- list(
+    fit=.fit,
+    data=list(
+      n_s=n_s,
+      n_u=n_u,
+      counts_s=rowSums(n_s),
+      counts_u=rowSums(n_u),
+      categories=.fit$categories,
+      meta=covar
+      # individual_id=individual_id
+    )
+  )
+  class(fit) <- c("COMPASSResult")
+  
+  compass.fit <- list(
+    fit = .compass_fit,
+    data=list(
+      n_s=n_s,
+      n_u=n_u,
+      counts_s=rowSums(n_s),
+      counts_u=rowSums(n_u),
+      categories=.compass_fit$categories,
+      meta=covar
+      # individual_id=individual_id
+    )
+  )
+  class(compass.fit) <- c("COMPASSResult")
+  
+  ###################
+  ### Collect Results
+  ###################
+  results.list <- list(fit,
+                       compass.fit,
+                       gamma.m,
+                       beta.true.final,
+                       I,
+                       K,
+                       K1,
+                       p,
+                       sim_rep
+  )
+  
+  names(results.list) <- c('sim.fit',
+                           'compass.fit',
+                           'gamma.m',
+                           'beta.true.final',
+                           'I',
+                           'K',
+                           'K1',
+                           'p',
+                           'sim_rep')
+  
+  return(results.list)
+}
+
+stopCluster(cl)
+```
+
+**Notes on including cats**
+
+
+## Compare Estimates to True
+
+Create a custom function for calculating the mode
+```{r}
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+```
+
+```{r}
+fits.out <- 
+lapply(sim.out.list, FUN = function(sim) {
+  #Give shortcut names to objects from sim.out.list
+  I <- sim$I
+  K <- sim$K
+  K1 <- sim$K1
+  p <- sim$p
+  sim_rep <- sim$sim_rep
+  sim.fit <- sim$sim.fit
+  compass.fit <- sim$compass.fit
+  gamma.m <- sim$gamma.m
+  beta.true.final <- sim$beta.true.final
+  
+  #Create an out directory
+  out.dir.loop <- file.path(out.dir,
+                            paste(paste0("I:", I),
+                                  paste0("K:", K),
+                                  paste0("p:", p),
+                                  paste0("rep:", sim_rep),
+                                  sep = "_"
+                                  )
+                                )
+  
+  out.fig.dir.loop <- file.path(out.dir.loop,
+                                "figures")
+  out.obj.dir.loop <- file.path(out.dir.loop,
+                                   "objects")
+  dir.create(out.dir.loop, showWarnings = FALSE)
+  dir.create(out.fig.dir.loop, showWarnings = FALSE)
+  dir.create(out.obj.dir.loop, showWarnings = FALSE)
+  
+  ###################################################################################
+  ### Gamma
+  sim.fit.gamma <- apply(sim.fit$fit$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))
+  ## Percent correct
+  percent.gamma.correct <-
+    # paste(
+      # "Percent gamma correct (excluding Kth subset):",
+      round(
+        sum(gamma.m == sim.fit.gamma[,-ncol(sim.fit.gamma)]) /
+          (dim(gamma.m)[1] * dim(gamma.m)[2]) * 100,
+        digits = 2
+      # )
+    )
+  
+  #########Compass
+  compass.fit.gamma <- apply(compass.fit$fit$fit$gamma, MARGIN = c(1,2), FUN = function(x) getmode(x))
+  ##Percent COMPASS correct
+  percent.gamma.correct.compass <-
+    round(
+        sum(gamma.m == compass.fit.gamma[,-ncol(compass.fit.gamma)]) /
+          (dim(gamma.m)[1] * dim(gamma.m)[2]) * 100,
+        digits = 2
+    )
+  
+  ##########################################################################################
+  ### Betas
+  sim.fit.beta.median <- apply(sim.fit$fit$beta, MARGIN = c(1,2), FUN = function(x) median(x))
+  
+  ##Coverage
+  #Find 95% quantile intervals
+  lower.95 <- apply(sim.fit$fit$beta, MARGIN = c(1,2), FUN = function(x) quantile(x,
+                                                                 prob = 0.025
+                                                                 )
+      )
+  upper.95 <- apply(sim.fit$fit$beta, MARGIN = c(1,2), FUN = function(x) quantile(x,
+                                                                 prob = 0.975
+                                                                 )
+      )
+  #Find percentage of true values outside of 95% quantile interval
+  beta.coverage <- beta.true.final >= lower.95 & beta.true.final <= upper.95
+  percent.beta.coverage <-
+    # paste(
+      # "Percent true betas within 95% quantile interval:",
+      round(
+        sum(
+          beta.coverage
+        ) / length(beta.true.final) * 100,
+        2
+      # )
+    )
+  
+  
+  
+  ##################
+  ## Save Fit Object
+  ##################
+  
+  saveRDS(sim.fit,
+          file = file.path(out.obj.dir.loop,
+                           paste(paste0("I:", I),
+                                 paste0("K:", K),
+                                 paste0("p:", p),
+                                 paste0("rep:", sim_rep, ".RDS"),
+                                 sep = "_"
+                                )
+                           )
+          )
+  
+  #################
+  ## Plot All Betas
+  #################
+  # 1. Extract beta draws into a dataframe with cluster and covariate indicators
+  # 2. Row-bind together into long format
+  # 3. Plot with x as cluster and y as covariate
+  
+  #Extract beta draws into a dataframe with cluster and covariate indicators
+  cov.out <- list(NULL)
+  cluster.out <- list(NULL)
+  
+  #Loop over each k-1 cluster
+  for (k in 1:K1) {
+    #Extract a matrix of draws x coefficients for current cluster
+    cluster <- t(apply(sim.fit$fit$beta, MARGIN = c(2,3), FUN = function(x) x[k]))
+    
+    #Make a dataframe for each covariate (column) with current cluster and covariate ID
+    for (cov in 1:(p+1)) { #p+1 b/c of intercept
+      cov.out[[cov]] <- 
+        data.frame(cluster = k,
+                 covariate = cov,
+                 value = apply(cluster, MARGIN = 1, FUN = function(y) y[cov])
+      )
+    }
+    
+    #Combine the dataframes for each coefficient for the current cluster
+    cluster.out[[k]] <- do.call('rbind', cov.out)
+  }
+  
+  #Combine the dataframes for all clusters
+  post.out <- do.call('rbind', cluster.out)
+
+  #Check that rows of post.out match dimension of original beta draws
+  post.out.dim.check <-
+    dim(post.out)[1] ==
+      dim(sim.fit$fit$beta)[1] * (dim(sim.fit$fit$beta)[2]) * dim(sim.fit$fit$beta)[3]
+
+  #Make cluster and covariate factors
+  post.out$cluster <- as.factor(post.out$cluster)
+  post.out$covariate <- as.factor(post.out$covariate)
+
+  ##Include true betas
+  post.out$true.beta <- NA
+  for (k in 1:K1) {
+    for (cov in 1:(p+1)) {
+      post.out$true.beta[post.out$cluster == k & post.out$covariate == cov] <- beta.true.final[k,cov]
+    }
+  }
+
+  #Check that length of unique true.beta is equal to number of true betas
+  true.beta.check <-
+  (
+  #Number of unique betas excluding duplicated 0s
+  length(unique(post.out$true.beta)) +
+    #Number of cluster-covariate combinations where true.beta is 0 minus 1 (b/c 1 true 0 already counted above) (unless only 1 true 0)
+    ifelse(length(unique(paste(post.out$cluster[post.out$true.beta == 0], post.out$covariate[post.out$true.beta == 0]))) == 0,
+      length(unique(paste(post.out$cluster[post.out$true.beta == 0], post.out$covariate[post.out$true.beta == 0]))),
+      length(unique(paste(post.out$cluster[post.out$true.beta == 0], post.out$covariate[post.out$true.beta == 0]))) - 1
+    )
+  ) ==
+    #Equal to dimension of true beta (without intercept?)
+    length(beta.true.final)
+  
+  ##Make the plot
+  #Mapping nice cluster names
+  cluster_names <- c(
+    "1" = "Subset 1",
+    "2" = "Subset 2",
+    "3" = "Subset 3",
+    "4" = "Subset 4",
+    "5" = "Subset 5",
+    "6" = "Subset 6",
+    "7" = "Subset 7",
+    "8" = "Subset 8",
+    "9" = "Subset 9",
+    "10" = "Subset 10",
+    "11" = "Subset 11",
+    "12" = "Subset 12",
+    "13" = "Subset 13",
+    "14" = "Subset 14",
+    "15" = "Subset 15",
+    "16" = "Subset 16",
+    "17" = "Subset 17"
+  )
+  
+  beta.post.true.plot <- 
+    ggplot(data = post.out,
+           aes(y = covariate, x = value)
+      )+
+      geom_vline(xintercept = 0,
+                 linewidth = 0.6,
+                 color = "dark gray"
+      )+
+      tidybayes::stat_halfeye(aes(fill = after_stat(level)),
+                              fatten_point = 0.85,
+                              alpha = 0.6
+      ) +
+      geom_segment(
+                   aes(x = true.beta,
+                       y = as.integer(covariate) - 0.15,
+                       yend = as.integer(covariate) + 0.15,
+                       xend = true.beta
+                    ),
+                   linewidth = 0.2
+      )+
+      facet_wrap(~ cluster,
+                 labeller = labeller(
+                   cluster = cluster_names
+                 ),
+                 ncol = 4
+      )+
+      theme_bw()+
+      xlab("Value")+
+      ylab("Covariate")+
+      scale_fill_brewer(name = "Credible\nlevel",
+                        na.translate = FALSE,
+                        palette = "Set1",
+      )
+  
+  ##Save the plot
+  ggsave(beta.post.true.plot,
+         filename = file.path(out.fig.dir.loop,
+                              paste0(
+                                paste("beta.post.true.plot",
+                                      paste0("I:", I),
+                                      paste0("K:", K),
+                                      paste0("p:", p),
+                                      paste0("rep:", sim_rep),
+                                      sep = "_"
+                                ),
+                                ".pdf"
+                              )
+                    ),
+         width = 6,
+         height = 3*(K1/4)
+  )
+  
+
+  ###########################################
+  #### Plot Posteriors Not Achieving Coverage
+  ###########################################
+  
+  #Loop over rows of beta.diff and find row,col of estimates that fail to achieve coverage
+  beta.no.cover.coord <- list(NULL)
+  for (i in 1:nrow(beta.coverage)) {
+    if(length(which(beta.coverage[i,] == FALSE)) > 0) {
+      #Paste the row name (i) with the indices of the columns for the current row
+      beta.no.cover.coord[[i]] <- paste(i, which(beta.coverage[i,] == FALSE), sep = ", ")
+    } else {
+      beta.no.cover.coord[[i]] <- NULL
+    }
+  }
+  beta.no.cover.coord.df <- do.call('c', beta.no.cover.coord)
+  
+  #Extract and plot posterior samples for flagged coefs (if any)
+  if (length(beta.no.cover.coord.df) > 0) {
+    lapply(1:length(beta.no.cover.coord.df), FUN = function(i) {
+      #Extract the posterior samples for the current beta
+      post <- data.frame(samples = eval(parse(text = paste0("sim.fit$fit$beta",
+                               "[",
+                               beta.no.cover.coord.df[i],
+                               ",]"
+                               )
+                                             )
+                                       )
+           )
+      
+      #Extract the true beta value
+      true.beta <- eval(parse(text = paste0("beta.true.final",
+                             "[",
+                             beta.no.cover.coord.df[i],
+                             "]"
+                                       )
+                         )
+                   )
+      
+      #Make the plot
+      beta.no.cover.post.plot <- 
+        ggplot(data = post,
+               aes(x = samples)
+          )+
+          theme_bw()+
+          geom_vline(xintercept = 0,
+                     size = 0.6,
+                     color = "dark gray"
+          )+
+          geom_hline(yintercept = 0,
+                     size = 0.6,
+                     color = "dark gray"
+          )+
+          ggdist::stat_halfeye(
+            .width = c(0.95, 0.8),
+            point_interval = "median_qi"    #Use median for point est
+          )+
+          geom_vline(xintercept = true.beta,
+                     color = "blue"
+          )+
+          xlab("Posterior sample")+
+          labs(title = paste0("Cluster: ", 
+                      stringr::str_split(beta.no.cover.coord.df[i],
+                                         pattern = ", ",
+                                         simplify = TRUE
+                      )[1],
+                      ", Covariate: ",
+                      stringr::str_split(beta.no.cover.coord.df[i],
+                                         pattern = ", ",
+                                         simplify = TRUE
+                      )[2]
+                      )
+          )
+      
+      ##Save the plot
+      ggsave(beta.no.cover.post.plot,
+             filename = file.path(out.fig.dir.loop,
+                                  paste0(
+                                    paste("beta.no.cover.post.plot",
+                                          paste0("I:", I),
+                                          paste0("K:", K),
+                                          paste0("p:", p),
+                                          paste0("rep:", sim_rep),
+                                          paste(
+                                            "cluster",
+                                            stringr::str_split(beta.no.cover.coord.df[i],
+                                                               pattern = ", ",
+                                                               simplify = TRUE
+                                            )[1],
+                                            sep = "-"
+                                          ),
+                                          paste(
+                                            "covariate",
+                                            stringr::str_split(beta.no.cover.coord.df[i],
+                                                               pattern = ", ",
+                                                               simplify = TRUE
+                                            )[2],
+                                            sep = "-"
+                                          ),
+                                          sep = "_"
+                                    ),
+                                    ".pdf"
+                                  )
+                        ),
+             width = 6,
+             height = 4
+      )
+    })
+
+  }
+  
+  mod.fit.list <- data.frame(
+                    I = I,
+                    K = K,
+                    p = p,
+                    Iters = iter,
+                    Reps = rep,
+                    Simulation.replicate = sim_rep,
+                    Percent.gamma.correct = percent.gamma.correct,
+                    percent.gamma.correct.compass = percent.gamma.correct.compass,
+                    Percent.beta.95.coverage = percent.beta.coverage,
+                    Post.out.check = post.out.dim.check,
+                    True.beta.check = true.beta.check
+  )
+  
+  return(mod.fit.list)
+  
+})
+```
+
+## Summarize
+
+```{r}
+sim.stats <- do.call('rbind', fits.out)
+
+sim.stats
+```
+
+```{r}
+sim.stats %>%
+  dplyr::group_by(I, K, p) %>%
+  dplyr::summarize(
+            iter = unique(iter),
+            N = n(),
+            Percent.gamma.correct.mean = round(mean(Percent.gamma.correct), 2),
+            Percent.gamma.correct.COMPASS.mean = round(mean(percent.gamma.correct.compass), 2),
+            Percent.gamma.correct.sd = round(sd(Percent.gamma.correct), 2),
+            Percent.gamma.correct.COMPASS.sd = round(sd(percent.gamma.correct.compass), 2),
+            Percent.beta.95.coverage.mean = round(mean(Percent.beta.95.coverage), 2),
+            Percent.beta.95.coverage.sd = round(sd(Percent.beta.95.coverage), 2)
+  )
+```
+
+## Save Output
+
+```{r}
+
+```
+
+
+## Logistic Regression with PFS
+
+```{r}
+log.reg.PFS <- 
+  do.call('rbind',
+    lapply(sim.out.list, FUN = function(fit) {
+        #Extract covariates from  metadata
+        temp <- fit$sim.fit$data$meta
+        
+        #Add polyfunctional scores from COMPASScovariate and COMPASS
+        temp$compass.cov.pfs <- PolyfunctionalityScore(fit$sim.fit)
+        temp$compass.pfs <- PolyfunctionalityScore(fit$compass.fit$fit)
+        
+        #Run logistic regressions for COMPASScovariate and COMPASS
+        logreg.compass.cov <- summary(glm(hiv ~ compass.cov.pfs, data = temp, family = binomial))
+        logreg.compass <- summary(glm(hiv ~ compass.pfs, data = temp, family = binomial))
+        
+        #Collect model output
+        logreg.output <-
+          bind_rows(
+            logreg.compass.cov$coefficients %>%
+              data.frame() %>%
+              tibble::rownames_to_column(var = "Model") %>%
+              filter(Model == "compass.cov.pfs") %>%
+              mutate(Model = replace(Model, Model == "compass.cov.pfs", "COMPASScov")) %>%
+              select(Model, Estimate, Pr...z..),
+            logreg.compass$coefficients %>%
+              data.frame() %>%
+              tibble::rownames_to_column(var = "Model") %>%
+              filter(Model == "compass.pfs") %>%
+              mutate(Model = replace(Model, Model == "compass.pfs", "COMPASS")) %>%
+              select(Model, Estimate, Pr...z..)
+          ) %>%
+          mutate(I = fit$I,
+                 K = fit$K,
+                 p = fit$p,
+                 rep = fit$sim_rep
+          )
+        
+        return(logreg.output)
+    })
+  )
+```
+
+Display results
+```{r}
+log.reg.PFS %>%
+  group_by(I, K, p, rep) %>%
+  summarize(Model = Model,
+            Estimate = Estimate,
+            Pvalue = Pr...z..
+  )
+```
+
