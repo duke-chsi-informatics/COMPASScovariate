@@ -219,6 +219,19 @@
 
   vmessage("Done!")
 
+  cats <- categories[, - ncol(categories), drop = FALSE]
+  subsets_df <- as.data.frame(cats)
+  for (i in seq_along(subsets_df)) {
+    tmp <- subsets_df[[i]]
+    subsets_df[[i]] <- paste0(
+      swap(tmp, c(0, 1), c("!", "")),
+      colnames(subsets_df)[[i]]
+    )
+  }
+  subsets <- do.call(function(...) paste(..., sep = "&"), subsets_df)
+
+  colnames(Mgamma) <- subsets
+
 
   ## set names on the output
   output <- list(
@@ -230,6 +243,7 @@
     gamma=gamma,
     mean_gamma=Mgamma,
     A_gamma=rowMeans(A_gm),
+    categories = categories,
     model="covariate"
   )
 
