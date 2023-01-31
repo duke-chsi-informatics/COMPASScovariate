@@ -74,6 +74,30 @@ Treatment group (HIV):
   2. COMPASS PFS -- hope to not be associated
 
 
+**Notes from meeting on 1/24/23**
+
+- Setup with age | HIV status makes sense, but we need to have the pattern emerge only when age is accounted for and have no pattern when it's not (something paradox)
+- Increase the number of markers to 8 so that we don't have people randomly have none or all subsets stimulated
+- Can check difference between mean.gamma for COMPASScovariate and COMPASS to identify subjects for which the model responds differently
+
+**Notes from meeting on 1/31/23**
+
+- Consider clinical outcome to be protection status, defined as not becoming infected when challenged
+  + Assume protection comes from a robust immune response == high polyfunctional score
+  + Probability of stimulation is a function of age
+- The chain of causality is: Age -> Prob. stim -> PFS -> Protection
+  + We created a set of DAGs that is uploaded as a PDF to /incubator/sim/DAG.pdf
+  + In the DAG, Age is a classic confounder between PFS and protection
+  + Practically speaking, we hope that COMPASS will give PFS such that the relationship with protection is weak, but COMPASScovariate will give improved PFS such that the relationship is stronger
+- For simulating true PFS from Prob. stim, can use the PolyfunctionalScore() function but pass it the true Gamma matrix (it normally uses the estimated mean gamma matrix)
+- For simulating true Protection status, need to choose a true beta and use a logistic regression-type link where PFS is associated with higher probability of Protection
+- Lynn also wants to add more noise the signal of the magnitude of change in probability between stim and unstim, which would translate to drawing ps.logmu.diff from some distribution with a small amount of variance
+- To do:
+  + Add variance to drawing ps.logmu.diff
+  + Add generating true PFS scores using true gamma matrix
+  + Add true betas for relationship between PFS and probability of protection
+  + Add generating true protection status from PFS given the beta
+
 ## Simulate Data and Run COMPASScovariate
 
 **Approach**
