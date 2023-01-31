@@ -386,7 +386,7 @@ flowDF_freqs <- flowDF_cut %>%
   rename_with(~ gsub("Count", "Freq", .x)) 
 
 #frequencies sum to 100
-# flowAim2_diffsAnti_freqs %>% select(contains("Freq")) %>% rowSums()
+# flowDF_freqs %>% select(contains("Freq")) %>% rowSums()
 
 #get differences in frequencies for each patient
 flowDF_freqDiffs <- flowDF_freqs %>%
@@ -531,7 +531,7 @@ antibodyDF_logScale_diffs %>%
 
 ## Covariate Correlation
 
-To further define our antibody covariate matrix, we get rid of mostly missing covariates and some correlated covariates then add age as a covariate, saving as the dataframe "antibodyDF_".
+To further define our antibody covariate matrix, we get rid of mostly missing covariates and some correlated covariates then add age as a covariate, saving as the dataframe "antibodyDF\_".
 
 ```{r -twoThree-antibodies, options}
 # the antibody variables of interest (exclude mostly NAs)
@@ -539,14 +539,13 @@ antibodyDF_noNAs<- antibodyDF_logScale_diffs %>%
   select(where(function(x) sum(is.na(x))<10))
 ```
 
+Based on Richard's analysis and the correlation plot below, we can get rid of a few antibodies and add in age as a covariate.
 
-Based on Richard's analysis and the correlation plot below, we can get rid of a few antibodies and add in age as a covariate. 
+-   gH/gL becomes either gH/gL/gO or Pentamer (MFI), which are glycoprotein complexes that antibodies target. Getting rid of gH/gL makes sense then, and gH/gL/gO and Pentamer appear to share similar correlation patterns. Out of these three, I keep only Pentamer.
 
-- gH/gL becomes either gH/gL/gO or Pentamer (MFI), which are glycoprotein complexes that antibodies target. Getting rid of gH/gL makes sense then, and gH/gL/gO and Pentamer appear to share similar correlation patterns. Out of these three, I keep only Pentamer.
+-   Richard excludes ID50 without complement (which is related to ID50 with complement and ID50), so I do the same.
 
-- Richard excludes ID50 without complement (which is related to ID50 with complement and ID50), so I do the same.
-
-- Richard excludes Whole AD169r Virion Phagocytosis (ADCP) (which is related to Phagocytosis Score), so I do the same.
+-   Richard excludes Whole AD169r Virion Phagocytosis (ADCP) (which is related to Phagocytosis Score), so I do the same.
 
 ```{r cov-corr, options}
 cor(antibodyDF_noNAs %>% select(-c(TheID,Visit))) %>%
@@ -556,10 +555,10 @@ cor(antibodyDF_noNAs %>% select(-c(TheID,Visit))) %>%
   ggplot(aes(x=rowname, y=var2, fill = val)) +
   geom_tile() + theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1)) +
   scale_fill_gradient2(low = "purple", mid= "white",high = "red") +
-  ggtitle("Antibody ")
+  ggtitle("Correlation between Transformed Antibody Measures")
 ```
 
-Another way of getting rid of antibodies involves looking at the correlation between antibodies and the differences in flow gate frequencies between stimulation types.
+Another way of getting rid of antibodies involves looking at the correlation between antibodies and the differences in flow gate frequencies between stimulation types. A negative correlation means when the difference between stimulated and unstimulated gate frequencies is positive and large, the transformed antibody measures are smaller. We'd expect there to not be a difference in frequencies when transformed antibody measures are larger, so we'd expect the beta coefficients to be negative.
 
 ```{r corr-abd-flow-cd4, options}
 corrPlot(flowAim2_cut_CD4, antibodyDF_noNAs)
@@ -571,7 +570,7 @@ We plot this correlation plot for both CD4 (above) and CD8 (below)
 corrPlot(flowAim2_cut_CD8, antibodyDF_noNAs)
 ```
 
-We put all of this together by getting rid of the four antibodies which seem redundant, getting rid of the antibodies which seem independent of flow frequency differences, and adding scaled age as a covariate.
+We put all of this together by getting rid of the four antibodies which seem redundant, getting rid of the antibodies which seem independent of flow frequency differences for CD4, and adding scaled age as a covariate.
 
 ```{r edit-covars, options}
 #########################################################
@@ -610,7 +609,6 @@ We originally cut down the number of gates by choosing the 6 gates with a maximu
 In order to avoid this sparsity, we consider the CD4 and CD8 cells separately. We additionally apply a sparsity criteria: we include gates with at least 2 patients with noStim counts more than 5 cells.
 
 These gate counts excluded using the sparsity condition get aggregated into the all-negative CD4 and CD8 gate for the separate CD4 and CD8 gate analysis respectively.
-
 
 ```{r COMPASS-clean, options}
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
@@ -698,7 +696,6 @@ COMPASS_OG <- function(flowDF_cut, postfix) {
 
 ```
 
-
 ## COMPASS Covariate Matrix
 
 The X (CD4) matrix we feed into COMPASS covariate is the matrix of `r ncol(antibodyDF_finalCD4 %>% select(-c(TheID, Visit)))` available antibody markers for our 20 patients. A glimpse of the input for X (CD4) is below:
@@ -746,8 +743,6 @@ rm(COMPASScovarobj)
 }
 ```
 
-
-
 ```{r beta-heatmap}
 
 #--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
@@ -773,7 +768,7 @@ round(apply(array(unlist(betaSamps), c(K1, P1, nSamp-(nSamp/4)+1)), c(1,2), func
                       str_remove_all("\\|"), contains("Count")) %>% colnames() %>% .[1:K1]) 
   
 
-colnames(CIDF) <- c("Intercept", colnames(antibodyDat %>% select(-c(Visit, TheID))), "Gate")
+colnames(CIDF) <- c("Intercept", colnames(antibodyDat), "Gate")
   
 CIDF %>%
   select("Gate", "Intercept", sort(colnames(.))) %>%
@@ -950,9 +945,9 @@ We select only CD4 gates and further exclude gates which have less than 5 of the
 ```{r cor-plot-cd4}
 #corrPlot(flowAim2_cut_CD4)
 
-flowAim2_cut_CD4 %>%
-  datatable(rownames = FALSE, options = list(
-  pageLength = 5, autoWidth = TRUE))
+# flowAim2_cut_CD4 %>%
+#   datatable(rownames = FALSE, options = list(
+#   pageLength = 5, autoWidth = TRUE))
 
 ```
 
@@ -976,7 +971,6 @@ pp65COMPASSAim2_CD4<- readRDS("~/CHSI/compass-covariate/data/pp65Aim2COMPASS2000
 
 The below boxplots compare the mean gamma values estimated by COMPASS-covariate and original COMPASS.
 
-
 ```{r todebug, include=FALSE}
 
     stim_unstim_cat_Aim2<- stim_unstim_cats(flowAim2_cut_CD4)
@@ -995,7 +989,6 @@ The below boxplots compare the mean gamma values estimated by COMPASS-covariate 
   endtime= Sys.time()
 ```
 
-
 ```{r compass-covar-CD4_notsparse, fig.height=10}
 set.seed(100)
 #COMPASS_covar(flowAim2_cut_CD4, X_CD4, "diffLogs_CD4")
@@ -1008,6 +1001,10 @@ compareGammaBoxplot(pp65COMPASSAim2_CD4, COMPASScovarAim2_CD4)
 ```
 
 ## Patients Who Change
+
+We look in more detail at patients who change; we'd like to see where all their flow and antibody values fall and whether they differ visibly from the people who don't change. Below are histograms of flow and antibody values with colored lines at the values for each patient of interest. 
+
+A couple patients have multiple mean-gamma estimates that change dramatically (see table).
 
 ```{r flowfreqdiffs, options}
 #--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
@@ -1112,7 +1109,7 @@ flowFreqDiffs(flowAim2_cut_CD4) %>%
   mutate(lessthan0Diff = values <0) %>%
   left_join(changingPats_CD4 %>% select(TheID, Flag)) %>%
   ggplot(aes(x= values)) + 
-  geom_histogram() + geom_vline(data=changingFlow, aes(xintercept=values, color=`Lower Covariate Mean Gamma`)) + 
+  geom_histogram() + geom_vline(data=changingFlow, aes(xintercept=values, color=TheID)) + 
   facet_grid(rows=vars(Vars),scales="free") +
   ggtitle("Changed Patients: Differences in pp65-noStim Flow") +
   xlab("Value") +
@@ -1134,7 +1131,7 @@ antibodyDF_finalCD4 %>%
   drop_na() %>%
   left_join(changingPats_CD4 %>% select(TheID, Flag)) %>%
   ggplot(aes(x= values)) + 
-  geom_histogram() + geom_vline(data=changingAbd, aes(xintercept=values, color=`Lower Covariate Mean Gamma`)) + 
+  geom_histogram() + geom_vline(data=changingAbd, aes(xintercept=values, color=TheID)) + 
   facet_grid(rows=vars(Vars), scales = "free") +
   ggtitle("Changed Patients: Antibody Measures") +
   xlab("Value") +
@@ -1177,7 +1174,7 @@ To get an idea of whether antibodies will help in predicting gate reactivity, we
 2.  Take the difference between the pp65 proportion and noStim proportion for each patient.
 3.  Calculate the correlation between these differences for each gate and antibody measure.
 
-Below, we create a correlation plot of differences in proportion of cells in each gate vs. each antibody measure of interest. More colored cells indicate more that an antibody is more correlated with reaction differences in the corresponding gate.
+Below, we create a correlation plot of differences in proportion of cells in each gate vs. each transformed antibody measure of interest (in this case, the scaled difference of logs). More colored cells indicate that an antibody is more correlated with reaction differences in the corresponding gate.
 
 Recall that we were wondering last time why the correlation plot of pre-transplant antibody measures with differences in proportion of cells was exactly opposite for some antibody measures compared to this one. This is caused by the different antibody measures; we look at just pre-transplant logged/scaled antibody measures before and we now look at the difference in logs between 2 to 3 months and pre-transplant antibody measures. If a pre-transplant measure is negatively correlated with expression of a gate after pp65 exposure, and the difference between 2 to 3 months and pre-transplant is positively correlated with expression, then that means the higher the 2 to 3 month antibody value, the more the estimated probability of expression is.
 
@@ -1186,19 +1183,18 @@ Underneath the correlation plot, we plot beta point estimates (the estimated eff
 Note that in the effect plot, we include intercepts. These intercepts represent the estimated base log-odds of each gate reacting to pp65, so we don't expect the actual colors to correspond between plots. We're more likely to see similar patterns in strength of color.
 
 ```{r beta-CD4_notsparse, options}
-corrPlot(flowAim2_cut_CD4,antibodyDF_logScale_diffs)
+corrPlot(flowAim2_cut_CD4,antibodyDF_finalCD4)
 beta_heatmap(COMPASScovarAim2_CD4, flowAim2_cut_CD4, X_CD4)
 ```
-
 
 ## CD8-Only
 
 We select only CD8 gates and further exclude gates which have less than 5 of their counts more than or equal to 2.
 
 ```{r cor-plot-CD8}
-flowAim2_cut_CD8 %>%
-  datatable(rownames = FALSE, options = list(
-  pageLength = 5, autoWidth = TRUE))
+# flowAim2_cut_CD8 %>%
+#   datatable(rownames = FALSE, options = list(
+#   pageLength = 5, autoWidth = TRUE))
 
 #corrPlot(flowAim2_cut_CD8)
 ```
@@ -1257,6 +1253,78 @@ COMPASScovarAim2_CD8<- readRDS("~/CHSI/compass-covariate/data/pp65Aim2COMPASScov
 compareGammaBoxplot(pp65COMPASSAim2_CD8, COMPASScovarAim2_CD8)
 ```
 
+## Patients Who Change
+
+We look in more detail at patients who change; we'd like to see where all their flow and antibody values fall and whether they differ visibly from the people who don't change. Below are histograms of flow and antibody values with colored lines at the values for each patient of interest. 
+
+A couple patients have multiple mean-gamma estimates that change dramatically (see table).
+
+```{r mean-gamma-changes-CD8, fig.height=12}
+#patients whose mean gamma changes past the 0.5 threshold for at least one gate, or whose mean gamma changes by at least 0.2
+changingPats_CD8 <- compareGammaDF(pp65COMPASSAim2_CD8, COMPASScovarAim2_CD8) %>%
+  pivot_wider(names_from = COMPASStype, 
+              values_from = MeanGamma) %>%
+  mutate(OGlessThreshold = Original < 0.5,
+         CovarlessThreshold = Covar < 0.5,
+         Flag = (OGlessThreshold & !CovarlessThreshold) |
+           (!OGlessThreshold & CovarlessThreshold) |
+           (abs(Original-Covar) >= 0.2)) %>%
+  filter(Flag) %>% ungroup() %>%
+  distinct()
+
+changingPats_CD8 %>% 
+  select(-c(OGlessThreshold, CovarlessThreshold, Flag)) %>%
+  datatable(rownames = FALSE, options = list(
+  pageLength = 5, autoWidth = TRUE))
+
+#flow frequency differences of patients who change
+changingFlow <-flowFreqDiffs(flowAim2_cut_CD8) %>%
+  ungroup() %>%
+  pivot_longer(cols = -c(TheID), names_to = "Vars", values_to = "values") %>%
+  left_join(changingPats_CD8 %>% 
+              select(TheID, CovarlessThreshold, Flag)) %>%
+  rename(`Lower Covariate Mean Gamma` = CovarlessThreshold) %>%
+  filter(Flag)
+
+flowFreqDiffs(flowAim2_cut_CD8) %>%
+  ungroup() %>%
+  pivot_longer(cols = -c(TheID), names_to = "Vars", values_to = "values") %>%
+  drop_na() %>%
+  mutate(lessthan0Diff = values <0) %>%
+  left_join(changingPats_CD8 %>% select(TheID, Flag)) %>%
+  ggplot(aes(x= values)) + 
+  geom_histogram() + geom_vline(data=changingFlow, aes(xintercept=values, color=TheID)) + 
+  facet_grid(rows=vars(Vars),scales="free") +
+  ggtitle("Changed Patients: Differences in pp65-noStim Flow") +
+  xlab("Value") +
+  theme(legend.position="bottom",
+        legend.spacing.x = unit(0, 'cm'))+
+  guides(color = guide_legend(label.position = "bottom"))
+
+
+#antibodies of patients who change
+changingAbd <- antibodyDF_finalCD8 %>%
+  pivot_longer(cols = -c(TheID, Visit), names_to = "Vars", values_to = "values") %>%
+  left_join(changingPats_CD8 %>% select(TheID, CovarlessThreshold, Flag)) %>%
+  rename(`Lower Covariate Mean Gamma` = CovarlessThreshold) %>%
+  filter(Flag)
+
+# demark changed-patient antibodies over histogram of antibody values
+antibodyDF_finalCD8 %>%
+  pivot_longer(cols = -c(TheID, Visit), names_to = "Vars", values_to = "values") %>%
+  drop_na() %>%
+  left_join(changingPats_CD8 %>% select(TheID, Flag)) %>%
+  ggplot(aes(x= values)) + 
+  geom_histogram() + geom_vline(data=changingAbd, aes(xintercept=values, color=TheID)) + 
+  facet_grid(rows=vars(Vars), scales = "free") +
+  ggtitle("Changed Patients: Antibody Measures") +
+  xlab("Value") +
+  theme(legend.position="bottom",
+        legend.spacing.x = unit(0, 'cm'))+
+  guides(color = guide_legend(label.position = "bottom"))
+
+```
+
 The acceptance rate for gamma for COMPASS is plotted on the below x-axis and the acceptance rate for gamma for COMPASS-covariate is plotted on the below y-axis.
 
 ```{r gamma-a-CD8, options}
@@ -1285,7 +1353,7 @@ betaTrace(COMPASScovarAim2_CD8$beta,
 ### Antibody-Flow Correlation and Estimated Effects
 
 ```{r beta-CD8_notsparse, options}
-corrPlot(flowAim2_cut_CD8,antibodyDF_logScale_diffs)
+corrPlot(flowAim2_cut_CD8,antibodyDF_finalCD8)
 beta_heatmap(COMPASScovarAim2_CD8, flowAim2_cut_CD8, X_CD8)
 ```
 
@@ -1300,7 +1368,7 @@ We get four sets of PFS scores:
 -   CD8 COMPASS original
 -   CD8 COMPASS covariate
 
-### PFS Scores
+### PFS Scores Without 3 "Independent" Covariates
 
 ```{r timePFS}
 #-------------------------------------------
@@ -1357,7 +1425,10 @@ pp65_Aim2_PFS <-
   separate(rowname, into = c("TheID", "Visit"), sep = "_") %>%
   mutate(Visit = as.numeric(Visit)) %>%
 # joining with demographic information
-  inner_join(pp65_demoInfo_Aim2) 
+  inner_join(pp65_demoInfo_Aim2) %>%
+# bind with additional antibody DF covariates
+  left_join(antibodyDF_noNAs %>% select(TheID, `Area Under Curve.y`,                             `CMV-specific IgG2 Concentration (ug/ml)`,
+                           ID50))
 ```
 
 We plot these polyfunctionality scores by infection status.
@@ -1407,57 +1478,139 @@ PFSplot(pp65_Aim2_PFS)
 PFSscatterplot(pp65_Aim2_PFS)
 ```
 
-
 We can use these polyfunctional scores as covariates in a Cox PH model in order to model whether a patient is reinfected or not with CMV after prophylaxis stop.
 
 ```{r agg-PFS}
-Cox_results <- function(df) {
+logistic_results <- function(df) {
 
-coxModCD4 <- coxph(Surv(CMVTestDaysfromProphyStop, event) ~ PFSCD4, df)
-
-
-
-coxModCD8 <- coxph(Surv(CMVTestDaysfromProphyStop, event) ~ PFSCD8, df)
+logModCD4 <- glm(event ~ PFSCD4 + `Area Under Curve.y` + `CMV-specific IgG2 Concentration (ug/ml)` + ID50,
+                 family = "binomial", df)
 
 
 
+logModCD8 <- glm(event ~ PFSCD8,
+                 family = "binomial", df)
 
-coxModCD4covar <- coxph(Surv(CMVTestDaysfromProphyStop, event) ~ PFSCD4covar, df)
 
 
 
-coxModCD8covar <- coxph(Surv(CMVTestDaysfromProphyStop, event) ~ PFSCD8covar, df)
+logModCD4covar <- glm(event ~ PFSCD4covar + `Area Under Curve.y` + `CMV-specific IgG2 Concentration (ug/ml)` + ID50,
+                 family = "binomial", df)
 
-summary(coxModCD4)$coef %>% 
-  as.data.frame() %>% select(-z) %>% 
-  bind_rows(summary(coxModCD8)$coef %>% 
-              as.data.frame() %>% select(-z)) %>%
-  bind_rows(summary(coxModCD4covar)$coef %>% 
-              as.data.frame() %>% select(-z)) %>%
-  bind_rows(summary(coxModCD8covar)$coef %>% 
-              as.data.frame() %>% select(-z)) %>%
-  `rownames<-`(c( "CD4PFS", 
-                 "CD8PFS","CD4PFS-Covar",
-                 "CD8PFS-Covar")) %>%
+
+
+logModCD8covar <- glm(event ~ PFSCD8covar,
+                 family = "binomial", df)
+
+summary(logModCD4)$coef %>% 
+  as.data.frame() %>% select(-`z value`) %>% 
+  bind_rows(summary(logModCD8)$coef %>% 
+              as.data.frame() %>% select(-`z value`)) %>%
+  bind_rows(summary(logModCD4covar)$coef %>% 
+              as.data.frame() %>% select(-`z value`)) %>%
+  bind_rows(summary(logModCD8covar)$coef %>% 
+              as.data.frame() %>% select(-`z value`)) %>%
+  rownames_to_column() %>%
+  # `rownames<-`(c( "CD4PFS", 
+  #                "CD8PFS","CD4PFS-Covar",
+  #                "CD8PFS-Covar")) %>%
   `colnames<-`(c("Coefficient", "Adjusted Hazard Ratio","SE of Coefficient", "P-value")) %>% mutate(across(where(is.numeric), ~round(.x,2))) %>% 
-  datatable()
+  # datatable()
 # %>%
-#   kable(col.names = c("Coefficient", 
-#                       "Adjusted Hazard Ratio", 
-#                       "SE of Coefficient", "P-value"), digits = 3) %>% 
-#   kable_classic() %>%
-#   pack_rows("CD4", 1,2) %>%
-#   pack_rows("CD8", 3,4) %>%
-#   pack_rows("CD4-Covar", 5, 6) %>%
-#   pack_rows("CD8-Covar", 7, 8)
+  kable(col.names = c("Coefficient",
+                      "Adjusted Hazard Ratio",
+                      "SE of Coefficient", "P-value"), digits = 3) %>%
+  kable_classic() %>%
+  pack_rows("CD4", start_row=1, end_row=5) %>%
+  pack_rows("CD8", start_row=6, end_row=7) %>%
+  pack_rows("CD4-Covar", start_row=8, end_row=12) %>%
+  pack_rows("CD8-Covar", start_row=13, end_row=14)
 
 }
 
-Cox_results(pp65_Aim2_PFS)
+logistic_results(pp65_Aim2_PFS)
 ```
+
+### PFS Scores (including 3 "Independent" covariates)
+
+```{r pfs-including-indep, options}
+COMPASScovarAim2_CD4_OG <- readRDS("~/CHSI/compass-covariate/data/archive/pp65Aim2diffsCOMPASScovar200000_seed100_more3forhalf_CD4_covar.rds")$pp65COMPASSAim2_diffs
+
+COMPASScovarAim2_CD8_OG <- readRDS("~/CHSI/compass-covariate/data/archive/pp65Aim2diffsCOMPASScovar200000_seed100_more3forhalf_CD8_covar.rds")$pp65COMPASSAim2_diffs
+
+
+PFSCD4covar <- PolyfunctionalityScoreCD4or8(list(fit=COMPASScovarAim2_CD4_OG), "^CD4") %>% as.data.frame() 
+
+PFSCD8covar <- PolyfunctionalityScoreCD4or8(list(fit=COMPASScovarAim2_CD8_OG), "^!CD4") %>% as.data.frame()
+
+pp65_Aim2_PFS <- 
+# bind PFS scores into a dataframe
+  cbind(PFSCD4, PFSCD8, PFSCD4covar, PFSCD8covar) %>%
+  `colnames<-`(c("PFSCD4", "PFSCD8", "PFSCD4covar", "PFSCD8covar")) %>%
+  rownames_to_column() %>%
+  separate(rowname, into = c("TheID", "Visit"), sep = "_") %>%
+  mutate(Visit = as.numeric(Visit)) %>%
+# joining with demographic information
+  inner_join(pp65_demoInfo_Aim2) 
+# bind with additional antibody DF covariates
+  # left_join(antibodyDF_noNAs %>% select(TheID, `Area Under Curve.y`,                             `CMV-specific IgG2 Concentration (ug/ml)`,
+  #                          ID50))
+
+PFSplot(pp65_Aim2_PFS)
+PFSscatterplot(pp65_Aim2_PFS)
+```
+
+```{r log-models-no-indep, options}
+
+df <- pp65_Aim2_PFS
+logModCD4 <- glm(event ~ PFSCD4 ,
+                 family = "binomial", df)
+
+
+
+logModCD8 <- glm(event ~ PFSCD8,
+                 family = "binomial", df)
+
+
+
+
+logModCD4covar <- glm(event ~ PFSCD4covar,
+                 family = "binomial", df)
+
+
+
+logModCD8covar <- glm(event ~ PFSCD8covar,
+                 family = "binomial", df)
+
+summary(logModCD4)$coef %>% 
+  as.data.frame() %>% select(-`z value`) %>% 
+  bind_rows(summary(logModCD8)$coef %>% 
+              as.data.frame() %>% select(-`z value`)) %>%
+  bind_rows(summary(logModCD4covar)$coef %>% 
+              as.data.frame() %>% select(-`z value`)) %>%
+  bind_rows(summary(logModCD8covar)$coef %>% 
+              as.data.frame() %>% select(-`z value`)) %>%
+  rownames_to_column() %>%
+  # `rownames<-`(c( "CD4PFS", 
+  #                "CD8PFS","CD4PFS-Covar",
+  #                "CD8PFS-Covar")) %>%
+  `colnames<-`(c("Coefficient", "Adjusted Hazard Ratio","SE of Coefficient", "P-value")) %>% mutate(across(where(is.numeric), ~round(.x,2))) %>% 
+  # datatable()
+# %>%
+  kable(col.names = c("Coefficient",
+                      "Adjusted Hazard Ratio",
+                      "SE of Coefficient", "P-value"), digits = 3) %>%
+  kable_classic() %>%
+  pack_rows("CD4", start_row=1, end_row=2) %>%
+  pack_rows("CD8", start_row=3, end_row=4) %>%
+  pack_rows("CD4-Covar", start_row=5, end_row=6) %>%
+  pack_rows("CD8-Covar", start_row=7, end_row=8)
+
+```
+
 ### FS Scores
 
-```{r timeFS}
+```{r timeFS, eval=FALSE}
 #-------------------------------------------
 # FUNCTION for PFS ignoring CD4 vs. CD8 gates
 # mean gamma now has burn-in of 0.5
@@ -1497,7 +1650,7 @@ pp65_Aim2_FS <-
 
 We plot these functionality scores by infection status.
 
-```{r fs-plot}
+```{r fs-plot,eval=FALSE}
 #-------------------------------------------
 # FUNCTION for PFS boxplots (infected vs. uninfected)
 #-------------------------------------------
@@ -1544,7 +1697,7 @@ FSscatterplot(pp65_Aim2_FS)
 
 We can use these functional scores as covariates in a Cox PH model in order to model whether a patient is reinfected or not with CMV after prophylaxis stop.
 
-```{r agg-FS}
+```{r agg-FS, eval=FALSE}
 Cox_results <- function(df) {
 
 coxModCD4 <- coxph(Surv(CMVTestDaysfromProphyStop, event) ~ FSCD4, df)
@@ -1594,7 +1747,7 @@ Cox_results(pp65_Aim2_FS)
 
 We attempt to put mean gamma as covariates into the Cox model.
 
-```{r mean-gamma-cox-CD4, options}
+```{r mean-gamma-cox-CD4, eval=FALSE}
 #join mean gamma with demo data
 pp65Aim2_meanGam <-mean_gam(pp65COMPASSAim2_CD4$fit$gamma, 0.5) %>%
   as.data.frame() %>%
@@ -1617,7 +1770,7 @@ summary(coxModCD4)$coef %>%
 
 For both covar and original COMPASS, this doesn't yield informative results.
 
-```{r mean-gamma-cox-CD4covar, options}
+```{r mean-gamma-cox-CD4covar, eval=FALSE}
 #join mean gamma with demo data
 pp65Aim2_meanGam <-mean_gam(COMPASScovarAim2_diffs_CD4$gamma, 0.5) %>%
   as.data.frame() %>%
