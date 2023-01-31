@@ -97,13 +97,13 @@ Treatment group (HIV):
 ```{r}
 set.seed(111)
 #Get number of iter and reps from 'run_simu_cov.sh'
-iter = as.integer(Sys.getenv("ITER")) #Number of COMPASScovariate iterations per replicate
-rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
-sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter combination
+# iter = as.integer(Sys.getenv("ITER")) #Number of COMPASScovariate iterations per replicate
+# rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
+# sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter combination
 
-# iter = 10000 #Number of COMPASScovariate iterations per replicate
-# rep = 1     #Number of COMPASScovariate replicates
-# sim.rep = 2
+iter = 2000 #Number of COMPASScovariate iterations per replicate
+rep = 2     #Number of COMPASScovariate replicates
+sim.rep = 1
 
 #Total counts
 e.total.mu = 10000 #Mean total number of events per subject
