@@ -498,6 +498,66 @@ stopCluster(cl)
 
 **Notes on including cats**
 
+## Examine
+
+### Plots
+
+```{r}
+sim.out.list[[1]]$beta.true.final
+```
+
+
+#### Proportion Stim - Unstim vs Age | HIV
+
+```{r}
+lapply(sim.out.list, FUN = function(sim) {
+  #Find the differences in proportions between stim and unstim
+  diff <- (sim$sim.fit$data$n_s / rowSums(sim$sim.fit$data$n_s)) - (sim$sim.fit$data$n_u / rowSums(sim$sim.fit$data$n_u))
+  
+  #Subset to just the first cluster/marker
+  diff.df <- as.data.frame(diff[,1])
+  
+  #Plot as a function of HIV status
+  qplot(y = diff.df$`diff[, 1]`,
+        x = sim$sim.fit$data$meta$age,
+        color = as.factor(sim$sim.fit$data$meta$hiv)
+  )+
+  theme_bw()+
+  xlab("Age")+
+  ylab("Prop. Stim - Prop. Unstim")+
+  scale_color_discrete(name = "HIV status")
+})
+```
+
+#### Gammma from COMPASScovariate vs COMPASS
+
+```{r}
+lapply(sim.out.list, FUN = function(sim) {
+  #Find the differences in mean gamma matrices between COMPASS and COMPASScovariate
+  mean.gamma.diff <- sim$sim.fit$fit$mean_gamma - sim$compass.fit$fit$fit$mean_gamma
+  
+  mean.gamma.diff <- mean.gamma.diff[, abs(colSums(mean.gamma.diff)) > 0]
+  
+  #Subset to the first subset/marker
+  mean.gamma.diff.df <- data.frame(cluster1 = mean.gamma.diff[,1])
+  
+  #Plot as a function of HIV status
+  qplot(y = mean.gamma.diff.df$cluster1,
+        x = sim$sim.fit$data$meta$age,
+        color = as.factor(sim$sim.fit$data$meta$hiv)
+  )+
+  theme_bw()+
+  scale_color_discrete(name = "HIV status")+
+  xlab("Age")+
+  ylab("Mean Gamma COMPASScov - COMPASS")
+  
+})
+```
+
+#### Mean Gamma vs Prop Stim - Unstim
+
+Does COMPASScovariate pick up the signal from the age covariate via mean gamma? 
+
 
 ## Compare Estimates to True
 
@@ -906,7 +966,83 @@ sim.stats %>%
 ```
 
 
-## Logistic Regression with PFS
+## Association Between PFS and HIV Status
+
+### Plots
+
+```{r}
+lapply(sim.out.list, FUN = function(sim) {
+  #Extract covariates from  metadata
+  temp <- sim$sim.fit$data$meta
+  
+  #Add polyfunctional scores from COMPASScovariate and COMPASS
+  temp$compass.cov.pfs <- PolyfunctionalityScore(sim$sim.fit)
+  temp$compass.pfs <- PolyfunctionalityScore(sim$compass.fit$fit)
+  
+  #Melt to long
+  temp.long <-
+    temp %>%
+    tidyr::pivot_longer(.,
+                        cols = c(compass.cov.pfs, compass.pfs),
+                        names_to = "model",
+                        values_to = "pfs"
+    ) %>%
+    #Make model names nice
+    mutate(model = replace(model, model == "compass.cov.pfs", "COMPASScovariate"),
+           model = replace(model, model == "compass.pfs", "COMPASS")
+    )
+  
+  #Plot as a function of HIV status
+  ggplot(data = temp.long,
+         aes(x = as.factor(hiv),
+             y = pfs
+         )
+  )+
+  theme_bw()+
+  geom_boxplot()+
+  facet_wrap(~ model)+
+  xlab("HIV Status")+
+  ylab("Polyfunctional score")
+})
+```
+
+```{r}
+lapply(sim.out.list, FUN = function(sim) {
+  #Extract covariates from  metadata
+  temp <- sim$sim.fit$data$meta
+  
+  #Add polyfunctional scores from COMPASScovariate and COMPASS
+  temp$compass.cov.pfs <- PolyfunctionalityScore(sim$sim.fit)
+  temp$compass.pfs <- PolyfunctionalityScore(sim$compass.fit$fit)
+  
+  #Melt to long
+  temp.long <-
+    temp %>%
+    tidyr::pivot_longer(.,
+                        cols = c(compass.cov.pfs, compass.pfs),
+                        names_to = "model",
+                        values_to = "pfs"
+    ) %>%
+    #Make model names nice
+    mutate(model = replace(model, model == "compass.cov.pfs", "COMPASScovariate"),
+           model = replace(model, model == "compass.pfs", "COMPASS")
+    )
+  
+  #Plot as a function of HIV status
+  ggplot(data = temp.long,
+         aes(x = age,
+             y = pfs
+         )
+  )+
+  theme_bw()+
+  geom_point()+
+  facet_wrap(~ model)+
+  xlab("Age")+
+  ylab("Polyfunctional score")
+})
+```
+
+### Logistic Regression
 
 ```{r}
 log.reg.PFS <- 
