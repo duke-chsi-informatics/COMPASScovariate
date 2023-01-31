@@ -1,5 +1,5 @@
 .COMPASS.covariate <- function(n_s, n_u, iterations, replications, X,
-                              verbose=TRUE, ...) {
+                              verbose=TRUE, init_with_fisher = FALSE, ...) {
 
   vmessage <- function(...)
     if (verbose) message(...) else invisible(NULL)
@@ -19,7 +19,7 @@
   p <- ncol(X) # number of features
   p1 = p + 1L # with intercept
   X1 = cbind(1, X) # feature matrix with intercept X = Ixp
-  init_with_fisher = FALSE
+
   if (!init_with_fisher) {
     indi = array(1, dim = c(I, K)) # 0 indicate that gamma_ik=0
     for (k in 1:K1) {
