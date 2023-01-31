@@ -120,15 +120,15 @@ beta.selection.cutoff = 0.2
 
 #HIV+ and HIV- subjects
 prob.hiv.pos = 0.5
-age.mean.hiv.neg = 1
-age.mean.hiv.pos = -1
-age.sd = 0.5
+age.mean.hiv.neg = 0.5
+age.mean.hiv.pos = -0.5
+age.sd = 0.8
 
 ### Pu and Ps
 #Concentration params drawn from lognormal
 pu.logmu = log(20)
-p.logsd = 0.01
-ps.logmu.diff = log(5)
+p.logsd = 0.03
+ps.logmu.diff = log(3)
 
 #Figure output
 out.dir = file.path("/work",
@@ -146,12 +146,12 @@ dir.create(out.dir,
 
 ```{r}
 #Get number of threads from SLURM scheduler as # of CPUs allocated
-threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
-# threads = 2
+# threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
+threads = 4
 
 #Make a single df of all combinations of parameters
 sim.pars <- expand.grid(I = c(30, 60, 100, 200),   #Number of subjects
-                        K = c(4),        #Number of unique cell subsets
+                        K = c(16),        #Number of unique cell subsets
                         p = c(0)         #Number of covariations IN ADDITION TO AGE | HIV status
             )
 
@@ -187,11 +187,14 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
                    )
   
   #Covariate betas
-  beta.true = matrix(rnorm(n = K1*(p),
-                           mean = beta.mu, 
-                           sd = beta.sigma), 
+  # beta.true = matrix(rnorm(n = K1*(p),
+  #                          mean = beta.mu, 
+  #                          sd = beta.sigma), 
+  #                    nrow = K1
+  # )
+  beta.true = matrix(runif(n = K1*(p)),
                      nrow = K1
-                    )
+  )
 
   #Variable selection -- if |true beta| < 0.5, then true beta = 0
   beta.true.selection = apply(beta.true, MARGIN = c(1,2), FUN = function(x) ifelse(abs(x) < beta.selection.cutoff, 0, x))
