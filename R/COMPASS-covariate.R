@@ -51,14 +51,15 @@
   alpha_u = array(0, dim=c(N,K));
   alpha_s = array(0, dim=c(N,K));
 
-  varp_s1 = array(sqrt(5),dim=c(K,1)); # sqrt(var)
-  varp_s2 = array(sqrt(15),dim=c(K,1)); # sqrt(var)
+  varp_s1 = array(sqrt(5),dim=c(K,1)); # variance of the proposal distribution 1 for alpha_s
+  varp_s2 = array(sqrt(15),dim=c(K,1)); #variance of the proposal distribution 2 for alpha_s
   varp_s2[K] = sqrt(25);
   varp_s1[K] = sqrt(15);
 
-  pvar_s = array(0.8,dim=c(K,1));
+  # alpha_s is proposed using a mixture distribution
+  pvar_s = array(0.8,dim=c(K,1)); # mixing for the mixture proposal distribution
   pvar_s[K] = 0.6;
-  varp_u = array(sqrt(10),dim=c(K,1));
+  varp_u = array(sqrt(10),dim=c(K,1)); #variance of the proposal distribution for alpha_u
 
   pp = array(0.65, dim = c(I, 1))
   pb1 <- clamp(1.5 / median(indi[, K]), 0, 0.9)
@@ -82,6 +83,7 @@
   tau2 = invgamma::rinvgamma(K1, shape = 0.5, rate = 1/u)
   W =  matrix(sapply(1:(I*K1), function(x) pgdraw::pgdraw(1,0)), nrow = I)
   sig2k = rep(10, K1) # var for normal prior of intercept
+
   #################### acceptance rate ###########################
   A_gm = array(as.integer(0), dim=c(I,N));
   A_alphau = array(as.integer(0), dim=c(K,N));
@@ -160,6 +162,7 @@
   A_alphau = array(as.integer(0), dim=c(K,N));
   A_alphas = array(as.integer(0), dim=c(K,N));
 
+  # TODO: implement replications from discrete so thinning is built-in.
   sNN=replications ## number of 'replications' -- should be user defined
   vmessage("Fitting model with ", sNN, " replications.")
   for (stt in 1:sNN) {
