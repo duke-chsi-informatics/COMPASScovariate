@@ -154,6 +154,9 @@ pu.logmu = log(20)
 p.logsd = 0.03
 ps.logmu.diff = log(3)
 
+### Protection
+beta.p = c(-2, 2)
+
 #Figure output
 out.dir = file.path("/work",
                         Sys.getenv("USER"),
@@ -171,7 +174,7 @@ dir.create(out.dir,
 ```{r}
 #Get number of threads from SLURM scheduler as # of CPUs allocated
 # threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
-threads = 4
+threads = 2
 
 #Make a single df of all combinations of parameters
 sim.pars <- expand.grid(I = c(30, 60, 100, 200),   #Number of subjects
@@ -219,10 +222,10 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   beta.true = matrix(runif(n = K1*(p)),
                      nrow = K1
   )
-
+  
   #Variable selection -- if |true beta| < 0.5, then true beta = 0
   beta.true.selection = apply(beta.true, MARGIN = c(1,2), FUN = function(x) ifelse(abs(x) < beta.selection.cutoff, 0, x))
-
+  
   #Bind intercept betas to other betas
   beta.true.final <- cbind(int.true, beta.true.selection)
   
@@ -431,15 +434,89 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   rownames(n_s) = 1:I
   rownames(n_u) = 1:I
   
+  ##################################
+  ## Generate Polyfunctional Scores
+  ##################################
+  
+  #Function
+  PolyfunctionalityScore.default <- function(categories, gamma) {
+    degree <- categories[, "Counts"]
+    n <- ncol(categories) - 1
+    pfs <-
+      apply(gamma, 1, function(row) {
+        ## (2 / (n+1)) is a factor that normalized the score between 0 and 1
+        sum(row * degree / choose(n, degree)) / n * (2 / (n + 1))
+      })
+    
+    return(pfs)
+  }
+  
+  #Calculate the categories (copied from simpleCOMPASS.R)
+  marker_names <- unique(
+    unlist( strsplit( gsub("!", "", colnames(n_s)), "&", fixed=TRUE ) )
+  )
+  n_markers <- length(marker_names)
+  cats <- as.data.frame( matrix(0, nrow=ncol(n_s), ncol=n_markers) )
+  rownames(cats) <- colnames(n_s)
+  colnames(cats) = marker_names
+  for (i in seq_along(cats)) {
+    #cats[, i] <- as.integer(grepl( paste0( colnames(cats)[i], "+" ), rownames(cats), fixed=TRUE ))
+    cats[,i] <-
+      as.integer(!grepl(paste0("!",colnames(cats)[i],"(&|$)+"),rownames(cats),fixed =
+                          FALSE))
+  }
+  cats$Counts <- apply(cats, 1, sum)
+  cats <- as.matrix(cats)
+  
+  #Modify gamma.m to add a column for the null subset (all 0s because none are stimulated)
+  gamma.m.mod <- cbind(gamma.m, rep(0, nrow(gamma.m)))
+  
+  #Calulate PFS
+  pfs <-
+    PolyfunctionalityScore.default(categories = cats,
+                                 gamma = gamma.m.mod
+    )
+  
+  #Add intercept
+  pfs <-
+    data.frame(int = rep(1, I),
+               pfs = pfs
+    ) %>%
+    as.matrix()
+  
+  ####################################
+  ## Generate Outcome (HIV protection)
+  ####################################
+  #Generate linear predictor and prob via inverse link
+  protect.prob <- binomial()$linkinv(pfs %*% beta.p) #p covariates from ith subject x betas for p coefficients for kth cluster gives linear predictor
+  
+  #Generate gamma as Bernoulli RV with probs from omega
+  protect.true <- rep(NA, length(protect.prob))
+  for(i in 1:length(protect.prob)) {
+    protect.true[i] <-
+      rbinom(n = 1,
+             size = 1,
+             prob = protect.prob[i]
+      )
+  }
+  
+  ##
+  covar <-
+    data.frame(covar,
+               pfs.true = pfs,
+               protect.prob.true = protect.prob,
+               protect.true = protect.true
+    )
+  
+  ########################
+  ### Run COMPASScovariate
+  ########################
+  
   ## Make metadata for COMPASS
   metadat <- 
     covar %>%
     select(-int) %>%
     mutate(sample.id = rownames(.))
-  
-  ########################
-  ### Run COMPASScovariate
-  ########################
   
   #Create a version of X without an intercept column
   X.mod = as.matrix(X[,-1])  #Use as.matrix to keep matrix format in case ncol(X.mod) = 1
@@ -497,6 +574,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
                        compass.fit,
                        gamma.m,
                        beta.true.final,
+                       beta.p,
                        I,
                        K,
                        K1,
@@ -508,6 +586,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
                            'compass.fit',
                            'gamma.m',
                            'beta.true.final',
+                           'beta.p',
                            'I',
                            'K',
                            'K1',
@@ -525,11 +604,6 @@ stopCluster(cl)
 ## Examine
 
 ### Plots
-
-```{r}
-sim.out.list[[1]]$beta.true.final
-```
-
 
 #### Proportion Stim - Unstim vs Age | HIV
 
@@ -999,6 +1073,8 @@ lapply(sim.out.list, FUN = function(sim) {
   #Extract covariates from  metadata
   temp <- sim$sim.fit$data$meta
   
+  #Add true protection status
+  
   #Add polyfunctional scores from COMPASScovariate and COMPASS
   temp$compass.cov.pfs <- PolyfunctionalityScore(sim$sim.fit)
   temp$compass.pfs <- PolyfunctionalityScore(sim$compass.fit$fit)
@@ -1016,16 +1092,54 @@ lapply(sim.out.list, FUN = function(sim) {
            model = replace(model, model == "compass.pfs", "COMPASS")
     )
   
-  #Plot as a function of HIV status
+  #Plot as a function of protection status
   ggplot(data = temp.long,
-         aes(x = as.factor(hiv),
+         aes(x = as.factor(protect.true),
              y = pfs
          )
   )+
   theme_bw()+
   geom_boxplot()+
   facet_wrap(~ model)+
-  xlab("HIV Status")+
+  xlab("True Protection")+
+  ylab("Polyfunctional score")
+})
+```
+
+```{r}
+sim.out.list[[1]]$sim.fit$data$meta
+
+lapply(sim.out.list, FUN = function(sim) {
+  #Extract covariates from  metadata
+  temp <- sim$sim.fit$data$meta
+  
+  #Add polyfunctional scores from COMPASScovariate and COMPASS
+  temp$compass.cov.pfs <- PolyfunctionalityScore(sim$sim.fit)
+  temp$compass.pfs <- PolyfunctionalityScore(sim$compass.fit$fit)
+  
+  #Melt to long
+  temp.long <-
+    temp %>%
+    tidyr::pivot_longer(.,
+                        cols = c(compass.cov.pfs, compass.pfs),
+                        names_to = "model",
+                        values_to = "pfs"
+    ) %>%
+    #Make model names nice
+    mutate(model = replace(model, model == "compass.cov.pfs", "COMPASScovariate"),
+           model = replace(model, model == "compass.pfs", "COMPASS")
+    )
+  
+  #Plot as a function of age
+  ggplot(data = temp.long,
+         aes(x = age,
+             y = pfs
+         )
+  )+
+  theme_bw()+
+  geom_point()+
+  facet_wrap(~ model)+
+  xlab("Age")+
   ylab("Polyfunctional score")
 })
 ```
@@ -1052,19 +1166,21 @@ lapply(sim.out.list, FUN = function(sim) {
            model = replace(model, model == "compass.pfs", "COMPASS")
     )
   
-  #Plot as a function of HIV status
+  #Plot as a function of age
   ggplot(data = temp.long,
-         aes(x = age,
+         aes(x = pfs.true.pfs,
              y = pfs
          )
   )+
   theme_bw()+
   geom_point()+
+  geom_abline(intercept = 0, slope = 1)+
   facet_wrap(~ model)+
-  xlab("Age")+
+  xlab("True polyfunctional score")+
   ylab("Polyfunctional score")
 })
 ```
+
 
 ### Logistic Regression
 
