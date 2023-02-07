@@ -98,6 +98,10 @@ Treatment group (HIV):
   + Add true betas for relationship between PFS and probability of protection
   + Add generating true protection status from PFS given the beta
 
+**Notes from meeting on 2/7/23**
+
+- Modify concentration parameters so that the amount added (diff) is positively associated with age. Make it the same for all cell subsets. 
+
 ## Simulate Data and Run COMPASScovariate
 
 **Approach**
