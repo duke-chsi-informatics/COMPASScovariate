@@ -156,7 +156,9 @@ age.sd = 0.8
 #Concentration params drawn from lognormal
 pu.logmu = log(20)
 p.logsd = 0.03
-ps.logmu.diff = log(3)
+#Diff in means of lognormal a function of age with true intercepts and slopes below
+ps.logmu.diff.beta = c(0.5, 0.5)
+ps.logmu.diff.sd = 0.1 #Error term for relationship between shift in concentration and age
 
 ### Protection
 beta.p = c(-2, 2)
@@ -181,7 +183,7 @@ dir.create(out.dir,
 threads = 2
 
 #Make a single df of all combinations of parameters
-sim.pars <- expand.grid(I = c(30, 60, 100, 200),   #Number of subjects
+sim.pars <- expand.grid(I = c(300),#, 60, 100, 200),   #Number of subjects
                         K = c(16),        #Number of unique cell subsets
                         p = c(0)         #Number of covariations IN ADDITION TO AGE | HIV status
             )
@@ -195,6 +197,7 @@ sim.pars <- do.call('rbind', lapply(1:sim.rep, FUN = function(simrep) {
   })
 )
 ```
+
 
 ### Run Simulation
 
@@ -348,6 +351,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   
   # - Leave the last column as 0 for all negative cell subset
   # - Use Nu instead of Nu.subset because now Kth category included in DM-generated data
+  # - For the Kth subset, draw from lognormal with ps.logmu * 3 so that concentration values are MUCH higher for this subset, giving a very large number of counts. This is important to allow stimulated subsets to have higher counts without lowering the counts of unstimulated subsets because they are zero sum -- the probability of "taking" those counts from the null subset is much higher if it has significantly higher counts than the rest.
   
   concentration_u = matrix(NA,
                            nrow = I,
@@ -400,20 +404,41 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   #Notes:
   
   #  - Leave the last column as 0
-  #  - Concentration is shifted by ps.logmu.diff if gamma = 1
+  #  - Concentration is shifted by amount which is a linear function of age if gamma = 1. Add some random noise to relationship between age and amount of concentration shifted.
   #  - Use Nu instead of Nu.subset because now Kth category included in DM-generated data
+  #  - For the Kth subset, draw from lognormal with ps.logmu * 3 so that concentration values are MUCH higher for this subset, giving a very large number of counts. This is important to allow stimulated subsets to have higher counts without lowering the counts of unstimulated subsets because they are zero sum -- the probability of "taking" those counts from the null subset is much higher if it has significantly higher counts than the rest.
   
   concentration_s = matrix(NA,
                            nrow = I,
                            ncol = K
                     )
   
+  #Loop over i rows and j columns in concentration_s matrix
   for (i in 1:I) {
-    concentration_s[i, 1:K1] = rlnorm(n = K1, 
-                   meanlog = (pu.logmu + ps.logmu.diff * gamma.m[i, ]), 
-                   sdlog = p.logsd
-    )
+    for (j in 1:K1) {
+      concentration_s[i, j] = 
+              #Draw the concentration value for the current cell (n=1) from lognormal
+              rlnorm(n = 1, 
+                     #Mean of lognormal is pu.logmu
+                     meanlog = (pu.logmu + 
+                                #If the corresponding gamma.m cell is 1, then subset is stimulated
+                                ifelse(gamma.m[i,j] == 1,
+                                       #If stimulated, add a diff value to mean of lognormal that is a linear function of age
+                                       X[i, ] %*% ps.logmu.diff.beta +
+                                         #Add small amount of noise to relationship between age and diff value
+                                         rnorm(mean = 0,
+                                               sd = ps.logmu.diff.sd,
+                                               n = 1
+                                         ),
+                                       #Else if not stimulated, add 0
+                                       0
+                                )
+                     ),
+                     sdlog = p.logsd
+      )
+    } #End loop over j columns
     
+    #Draw concentration for null subset (Kth column) from lognormal with mean pu.logmu * constant
     concentration_s[i, K] = rlnorm(n = 1,
                                   meanlog = pu.logmu*3,
                                   sdlog = p.logsd
@@ -428,7 +453,8 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
     #                                                    alpha = concentration_s[i,],     #Concentration vector
     #                                                    beta = 1                         #Common shape parameter
     #                                                             )
-  }
+  
+  } #End loop over i rows
   
   ## Add colnames
   colnames(n_s) = 1:K
@@ -621,8 +647,8 @@ lapply(sim.out.list, FUN = function(sim) {
   
   #Plot as a function of HIV status
   qplot(y = diff.df$`diff[, 1]`,
-        x = sim$sim.fit$data$meta$age,
-        color = as.factor(sim$sim.fit$data$meta$hiv)
+        x = sim$sim.fit$data$meta$age
+        # color = as.factor(sim$sim.fit$data$meta$hiv)
   )+
   theme_bw()+
   xlab("Age")+
@@ -1200,8 +1226,8 @@ log.reg.PFS <-
         temp$compass.pfs <- PolyfunctionalityScore(fit$compass.fit$fit)
         
         #Run logistic regressions for COMPASScovariate and COMPASS
-        logreg.compass.cov <- summary(glm(hiv ~ compass.cov.pfs, data = temp, family = binomial))
-        logreg.compass <- summary(glm(hiv ~ compass.pfs, data = temp, family = binomial))
+        logreg.compass.cov <- summary(glm(protect.true ~ compass.cov.pfs, data = temp, family = binomial))
+        logreg.compass <- summary(glm(protect.true ~ compass.pfs, data = temp, family = binomial))
         
         #Collect model output
         logreg.output <-
