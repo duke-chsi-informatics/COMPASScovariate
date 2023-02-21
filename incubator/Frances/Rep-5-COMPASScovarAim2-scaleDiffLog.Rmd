@@ -381,7 +381,8 @@ flow_freqDiffs <- function(flowDF_cut) {
   #get differences in frequencies for each patient
   flowDF_freqDiffs <- flowDF_freqs %>%
     group_by(TheID) %>%
-    summarise(across(contains("Freq"), ~ lag(.x) - .x)) %>%
+  #TODO: check if this is the right order
+    summarise(across(contains("Freq"), ~ .x-lag(.x))) %>%
     drop_na()
 }
 
@@ -1311,6 +1312,155 @@ flow_freqDiffs(flowAim2_cut_CD4) %>%
 
 ```
 
+### Outliers 
+
+There are two patients who have outliers in difference between pp65 and noStim. We arrange proportions in pp65/noStim in descending order to see where these outliers stem from; in this dataset, the proportion difference outliers stem from pp65. 
+
+```{r outlier-loop, options}
+
+#arrange pp65 by descending proportion
+pp65_freq <- flowAim2_cut_CD4 %>% select(TheID, Visit, contains("Count")) %>%
+  filter(Visit %in% c(1,2)) %>% 
+  inner_join(pp65_demoInfo_Aim2) %>% 
+  select(TheID, Visit, matches("^CD4.*(\\+|-).*(\\+|-).*(\\+|-).*(\\+|-).*(\\+|-).*")) %>%
+  mutate(sumCounts = rowSums(across(contains("Count")))) %>%
+  # proportion across all gates (because COMPASS includes the CD4 vs.CD8 gates)
+    mutate(across(contains("Count"), ~ .x/sumCounts)) %>%
+    select(-c(sumCounts)) %>%
+    rename_with(~ gsub("Count", "Freq", .x)) 
+
+#arrange noStim by descending proportion
+noStim_freq <- noStim %>% select(TheID, Visit, contains("Count")) %>%
+  filter(Visit %in% c(1,2)) %>%
+  inner_join(pp65_demoInfo_Aim2) %>% 
+  select(TheID, Visit, matches("^CD4.*(\\+|-).*(\\+|-).*(\\+|-).*(\\+|-).*(\\+|-).*")) %>%
+  mutate(sumCounts = rowSums(across(contains("Count")))) %>%
+  # proportion across all gates (because COMPASS includes the CD4 vs.CD8 gates)
+    mutate(across(contains("Count"), ~ .x/sumCounts)) %>%
+    select(-c(sumCounts)) %>%
+    rename_with(~ gsub("Count", "Freq", .x)) 
+
+
+pp65_freq %>%
+  pivot_longer(-c(TheID,Visit), names_to = "Gate", values_to = "Freq") %>%
+  select(-Visit) %>%
+  group_by(Gate) %>%
+# take top 2 frequencies per gate
+  arrange(desc(Freq)) %>%
+  slice_head(n=3) #%>%
+#   ungroup() %>%
+#   group_by(TheID) %>%
+# # count how many times each patient is in top two
+#   summarise(mean_Freq=mean(Freq),
+#             median_Freq=median(Freq),
+#             n=n()) %>%
+#   arrange(desc(n))
+
+# "CTOT22-39-195", "CTOT22-39-189"
+noStim_freq %>%
+  pivot_longer(-c(TheID,Visit), names_to = "Gate", values_to = "Freq") %>%
+  select(-Visit) %>%
+  group_by(Gate) %>%
+# take bottom 2 frequencies per gate
+  arrange(desc(Freq)) %>%
+  slice_tail(n=2) %>%
+  ungroup() %>%
+# count how many times each patient is in top two
+  group_by(TheID) %>%
+  summarise(mean_Freq=mean(Freq),
+            median_Freq=median(Freq),
+            n=n()) %>%
+  arrange(desc(n))
+
+pp65 %>% filter(TheID %in% c("CTOT22-39-195","CTOT22-39-189"), 
+                Visit %in% c(1,2)) %>% select(-contains("Freq"),-contains("Count")) %>%
+# join with flow visit data
+  left_join(WhenIsFlow) %>%
+  select(-name) %>%
+  rename(FlowDate=value) %>% 
+  write_csv("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/Misc/outliers.csv")
+
+
+```
+
+
+```{r outliers, fig.height=20}
+
+
+# median_pp65_prop <- pp65 %>%
+#   select(TheID, Visit, contains("Count")) %>%
+#   filter(Visit %in% c(1,2)) %>% 
+#   inner_join(pp65_demoInfo_Aim2) %>% 
+#   select(TheID, Visit, matches(".*(\\+|-).*(\\+|-).*(\\+|-).*(\\+|-).*(\\+|-).*")) %>%
+#   mutate(sumCounts = rowSums(across(contains("Count")))) %>%
+#   # proportion across all gates (because COMPASS includes the CD4 vs.CD8 gates)
+#     mutate(across(contains("Count"), ~ .x/sumCounts)) %>%
+#     select(-c(sumCounts)) %>%
+#     rename_with(~ gsub("Count", "Freq", .x)) %>%
+#   pivot_longer(-c(TheID,Visit), names_to = "Gates", values_to = "Freqs") %>%
+#   group_by(Gates) %>% summarise(med_freq=median(Freqs))
+# 
+# pp65 %>% 
+#   select(TheID, Visit, contains("Count")) %>%
+#   filter(Visit %in% c(1,2)) %>%
+#   filter(TheID %in% c("CTOT22-39-195", "CTOT22-39-189")) %>% inner_join(pp65_demoInfo_Aim2) %>% 
+#   select(TheID, Visit, matches(".*(\\+|-).*(\\+|-).*(\\+|-).*(\\+|-).*(\\+|-).*")) %>%
+#   mutate(sumCounts = rowSums(across(contains("Count")))) %>%
+#   # proportion across all gates (because COMPASS includes the CD4 vs.CD8 gates)
+#     mutate(across(contains("Count"), ~ .x/sumCounts)) %>%
+#     select(-c(sumCounts)) %>%
+#     rename_with(~ gsub("Count", "Freq", .x)) %>%
+#   pivot_longer(-c(TheID,Visit), names_to = "Gates", values_to = "Freqs") %>%
+# # join with median pp65
+#   left_join(median_pp65_prop) %>% 
+#   ggplot(aes(x=Freqs)) + geom_histogram() + 
+#   geom_vline(aes(xintercept=med_freq)) + 
+#   facet_wrap(.~Gates, scales="free",ncol=3)
+
+
+
+# flowDF_cut_CD4 %>%
+#     mutate(sumCounts = rowSums(across(contains("Count")))) %>%
+#   # proportion across all gates (because COMPASS includes the CD4 vs.CD8 gates)
+#     mutate(across(contains("Count"), ~ .x/sumCounts)) %>%
+#     select(-c(ID, sumCounts)) %>%
+#     rename_with(~ gsub("Count", "Freq", .x)) 
+```
+
+We see whether the difference originates from pp65 or noStim.
+
+```{r nostim-outliers, fig.height=20}
+median_noStim_prop <- noStim %>%
+  select(TheID, Visit, contains("Count")) %>%
+  filter(Visit %in% c(1,2)) %>% 
+  inner_join(pp65_demoInfo_Aim2) %>% 
+  select(TheID, Visit, matches(".*(\\+|-).*(\\+|-).*(\\+|-).*(\\+|-).*(\\+|-).*")) %>%
+  mutate(sumCounts = rowSums(across(contains("Count")))) %>%
+  # proportion across all gates (because COMPASS includes the CD4 vs.CD8 gates)
+    mutate(across(contains("Count"), ~ .x/sumCounts)) %>%
+    select(-c(sumCounts)) %>%
+    rename_with(~ gsub("Count", "Freq", .x)) %>%
+  pivot_longer(-c(TheID,Visit), names_to = "Gates", values_to = "Freqs") %>%
+  group_by(Gates) %>% summarise(med_freq=median(Freqs))
+
+noStim %>% 
+  select(TheID, Visit, contains("Count")) %>%
+  filter(Visit %in% c(1,2)) %>%
+  filter(TheID %in% c("CTOT22-39-195", "CTOT22-39-189")) %>% inner_join(pp65_demoInfo_Aim2) %>% 
+  select(TheID, Visit, matches(".*(\\+|-).*(\\+|-).*(\\+|-).*(\\+|-).*(\\+|-).*")) %>%
+  mutate(sumCounts = rowSums(across(contains("Count")))) %>%
+  # proportion across all gates (because COMPASS includes the CD4 vs.CD8 gates)
+    mutate(across(contains("Count"), ~ .x/sumCounts)) %>%
+    select(-c(sumCounts)) %>%
+    rename_with(~ gsub("Count", "Freq", .x)) %>%
+  pivot_longer(-c(TheID,Visit), names_to = "Gates", values_to = "Freqs") %>%
+# join with median pp65
+  left_join(median_noStim_prop) %>% 
+  ggplot(aes(x=Freqs)) + geom_histogram() + 
+  geom_vline(aes(xintercept=med_freq)) + 
+  facet_wrap(.~Gates, scales="free",ncol=3)
+```
+
 ## CD8-Only
 
 We select only CD8 gates and further exclude gates which have less than 5 of their counts more than or equal to 2.
@@ -1885,22 +2035,23 @@ summary(logModCD4)$coef %>%
 For original and covariate COMPASS separately, we run univariate logistic regression to see whether expression of gates is associated with infection.
 
 ```{r univar-parent-loop, options}
-out = NULL
-
-gateCOMPASScombos <- compareGammaDF(pp65COMPASSAim2_CD4, COMPASScovarAim2_CD4) %>%
-  select(Gate, COMPASStype) %>% distinct()
-
-for (i in 1:nrow(gateCOMPASScombos)) {
-  
-  gateName<- gateCOMPASScombos[i,]$Gate
-  compassType <- gateCOMPASScombos[i,]$COMPASStype
-
-  out = c(out, 
-          knitr::knit_expand('~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/scaleDiff-univarLog.Rmd'))
-}
+# out = NULL
+# 
+# gateCOMPASScombos <- compareGammaDF(pp65COMPASSAim2_CD4, COMPASScovarAim2_CD4) %>%
+#   select(Gate, COMPASStype) %>% distinct()
+# 
+# for (i in 1:nrow(gateCOMPASScombos)) {
+#   
+#   gateName<- gateCOMPASScombos[i,]$Gate
+#   compassType <- gateCOMPASScombos[i,]$COMPASStype
+# 
+#   out = c(out, 
+#           knitr::knit_expand('~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/scaleDiff-univarLog.Rmd'))
+#}
+#`r paste(knitr::knit(text = out), collapse = '\n\n')`
 ```
 
-`r paste(knitr::knit(text = out), collapse = '\n\n')`
+
 
 ```{r mean-gam-logistic, options}
 # gateName = "+--+"
