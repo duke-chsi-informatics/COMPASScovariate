@@ -102,6 +102,20 @@ Treatment group (HIV):
 
 - Modify concentration parameters so that the amount added (diff) is positively associated with age. Make it the same for all cell subsets. 
 
+**Notes from meeting on 2/14/23:**
+
+- COMPASScovariate cannot adjust for confounding/bias because of the within-subject application of the stimulation treatment -- since every subject is given both treatment (stim) and control (unstim), there is basically no way a covariate can affect which exposure each subject receives. 
+  + Therefore, consider the covariate as an effect modifier -- accounting for it can improve the precision of the estimates
+- For ease of interpretation, change continuous covariate to binary indicator.
+
+**Notes from meeting on 2/21/23**
+
+- Lynn agrees precision of estimates should be a focus for COMPASScovariate
+- To do:
+  + Check the acceptance rate for the sampling -- if too low, may need to tune the model
+  + Compare mean gamma (estimates of probability of response) to true probabilities instead of comparing gamma. Find the differences for both COMPASS and COMPASScovariate, then find the difference in those differences to look for subject-cell types. 
+  + Increase magnitude of stimulation betas -- draw them from uniform(1,2)
+
 ## Simulate Data and Run COMPASScovariate
 
 **Approach**
@@ -129,7 +143,7 @@ set.seed(111)
 # rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
 # sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter combination
 
-iter = 2000 #Number of COMPASScovariate iterations per replicate
+iter = 5000 #Number of COMPASScovariate iterations per replicate
 rep = 2     #Number of COMPASScovariate replicates
 sim.rep = 1
 
@@ -156,9 +170,9 @@ age.sd = 0.8
 #Concentration params drawn from lognormal
 pu.logmu = log(20)
 p.logsd = 0.03
-#Diff in means of lognormal a function of age with true intercepts and slopes below
-ps.logmu.diff.beta = c(0.5, 0.5)
-ps.logmu.diff.sd = 0.1 #Error term for relationship between shift in concentration and age
+#Diff in means of lognormal a function of covariate with true intercepts and slopes below
+ps.logmu.diff.beta = c(0.5, 1)
+ps.logmu.diff.sd = 0.1 #Error term for relationship between shift in concentration param and covariate
 
 ### Protection
 beta.p = c(-2, 2)
@@ -183,7 +197,7 @@ dir.create(out.dir,
 threads = 2
 
 #Make a single df of all combinations of parameters
-sim.pars <- expand.grid(I = c(300),#, 60, 100, 200),   #Number of subjects
+sim.pars <- expand.grid(I = c(200),#, 60, 100, 200),   #Number of subjects
                         K = c(16),        #Number of unique cell subsets
                         p = c(0)         #Number of covariations IN ADDITION TO AGE | HIV status
             )
@@ -197,7 +211,6 @@ sim.pars <- do.call('rbind', lapply(1:sim.rep, FUN = function(simrep) {
   })
 )
 ```
-
 
 ### Run Simulation
 
@@ -281,7 +294,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   
   #Matrix matrix version without HIV status
   X = covar %>%
-        dplyr::select(-hiv) %>%
+        dplyr::select(-age) %>%
         as.matrix()
   
   ### True Gamma Matrix
@@ -633,9 +646,19 @@ stopCluster(cl)
 
 ## Examine
 
-### Plots
+### Acceptance Rate
 
-#### Proportion Stim - Unstim vs Age | HIV
+Check acceptance rate for sampler for COMPASS and COMPASScovariate (want 20% - 30%). If too low, need to tune the algorithm. 
+```{r}
+summary(sim.out.list[[1]]$sim.fit$fit$A_gamma)
+
+summary(sim.out.list[[1]]$compass.fit$fit$fit$A_gamma)
+```
+
+
+### True Values
+
+#### Proportion Stim - Unstim vs Chemokine X
 
 ```{r}
 lapply(sim.out.list, FUN = function(sim) {
@@ -646,16 +669,81 @@ lapply(sim.out.list, FUN = function(sim) {
   diff.df <- as.data.frame(diff[,1])
   
   #Plot as a function of HIV status
-  qplot(y = diff.df$`diff[, 1]`,
-        x = sim$sim.fit$data$meta$age
+  qplot(x = diff.df$`diff[, 1]`,
+        y = as.factor(sim$sim.fit$data$meta$hiv)
         # color = as.factor(sim$sim.fit$data$meta$hiv)
   )+
+  # geom_jitter(width = 0.5)+
+  tidybayes::stat_halfeye()+
   theme_bw()+
-  xlab("Age")+
-  ylab("Prop. Stim - Prop. Unstim")+
+  ylab("Cytokine X Presence")+
+  xlab("Prop. Stim - Prop. Unstim")+
   scale_color_discrete(name = "HIV status")
 })
 ```
+
+#### True PFS vs True Protection
+
+```{r}
+lapply(sim.out.list, FUN = function(sim) {
+  #Linear predictor vs PFS
+  plot1 <-
+  ggplot(data = sim$sim.fit$data$meta,
+         aes(
+           x = pfs.true.pfs,
+           y = binomial()$linkfun(protect.prob.true)
+         )
+  )+
+  geom_point()+
+  geom_abline(intercept = beta.p[1],
+              slope = beta.p[2]
+  )+
+  xlim(-2, 2)
+  
+  #Probability of protection vs PFS
+  plot2 <- 
+  ggplot(data = sim$sim.fit$data$meta,
+         aes(
+           x = pfs.true.pfs,
+           y = protect.prob.true
+         )
+  )+
+  geom_point()+
+  xlim(-2, 2)+
+  ylim(0, 1)
+  
+  #PFS vs protection outcome
+  plot3 <-
+  ggplot(data = sim$sim.fit$data$meta,
+         aes(
+           x = pfs.true.pfs,
+           y = as.factor(protect.true)
+         )
+  )+
+  geom_point()+
+  tidybayes::stat_halfeye()
+  
+  return(list(plot1, plot2, plot3))
+})
+
+```
+
+Logistic regression of true protection against true PFS
+```{r}
+lapply(sim.out.list, FUN = function(sim) {
+  (
+    coef(
+      glm(protect.true ~ pfs.true.pfs,
+          family = "binomial",
+          data = sim$sim.fit$data$meta
+        )
+    )
+  )
+})
+```
+
+
+### Estimated Values
 
 #### Gammma from COMPASScovariate vs COMPASS
 
@@ -670,17 +758,51 @@ lapply(sim.out.list, FUN = function(sim) {
   mean.gamma.diff.df <- data.frame(cluster1 = mean.gamma.diff[,1])
   
   #Plot as a function of HIV status
-  qplot(y = mean.gamma.diff.df$cluster1,
-        x = sim$sim.fit$data$meta$age,
-        color = as.factor(sim$sim.fit$data$meta$hiv)
+  qplot(x = mean.gamma.diff.df$cluster1,
+        # x = sim$sim.fit$data$meta$age,
+        y = as.factor(sim$sim.fit$data$meta$hiv)
   )+
+  tidybayes::stat_halfeye()+
+  # geom_jitter(width = 0.25)+
   theme_bw()+
   scale_color_discrete(name = "HIV status")+
-  xlab("Age")+
-  ylab("Mean Gamma COMPASScov - COMPASS")
+  ylab("Cytokine X Presence")+
+  xlab("Mean Gamma COMPASScov - COMPASS")
   
 })
 ```
+
+#### Variance of Gamma Posteriors
+
+Is the precision of the estimates lower for COMPASS without a covariate?
+
+```{r}
+dim(sim.out.list[[1]]$sim.fit$fit$mean_gamma)
+
+#Posterior draws for gamma[1,1] from COMPASScovariate
+
+
+#Posterior draws for gamma[1,1] from COMPASS
+lapply(1:K, FUN = function(k) {
+  print(
+    paste(
+      c("Var for COMPASScovariate:",
+        var(sim.out.list[[1]]$sim.fit$fit$gamma[2,k,]),
+        "Var for COMPASS:",
+        var(sim.out.list[[1]]$compass.fit$fit$fit$gamma[2,k,])
+      )
+    )
+  )
+})
+
+
+```
+
+
+```{r}
+(sim.out.list[[1]]$sim.fit$data$n_s / rowSums(sim.out.list[[1]]$sim.fit$data$n_s)) - (sim.out.list[[1]]$sim.fit$data$n_u / rowSums(sim.out.list[[1]]$sim.fit$data$n_u))
+```
+
 
 #### Mean Gamma vs Prop Stim - Unstim
 
@@ -1094,7 +1216,7 @@ sim.stats %>%
 ```
 
 
-## Association Between PFS and HIV Status
+## Association Between PFS and Protection Outcome
 
 ### Plots
 
@@ -1162,14 +1284,14 @@ lapply(sim.out.list, FUN = function(sim) {
   
   #Plot as a function of age
   ggplot(data = temp.long,
-         aes(x = age,
+         aes(x = as.factor(hiv),
              y = pfs
          )
   )+
   theme_bw()+
   geom_point()+
   facet_wrap(~ model)+
-  xlab("Age")+
+  xlab("Cytokine X Presence")+
   ylab("Polyfunctional score")
 })
 ```
