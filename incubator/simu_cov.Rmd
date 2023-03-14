@@ -156,6 +156,8 @@ e.subset.sd = 5   #SD of number of events per subject that are not in the Kth ca
 #Betas
 beta.mu = 0
 beta.sigma = 0.8
+beta.unif.min = 2
+beta.unif.max = 3
 int.mu = 0
 int.sd = 0.1
 beta.selection.cutoff = 0.2
@@ -239,7 +241,10 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   #                          sd = beta.sigma), 
   #                    nrow = K1
   # )
-  beta.true = matrix(runif(n = K1*(p)),
+  beta.true = matrix(runif(n = K1*(p),
+                           min = beta.unif.min,
+                           max = beta.unif.max
+                     ),
                      nrow = K1
   )
   
@@ -616,6 +621,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   results.list <- list(fit,
                        compass.fit,
                        gamma.m,
+                       omega,
                        beta.true.final,
                        beta.p,
                        I,
@@ -628,6 +634,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   names(results.list) <- c('sim.fit',
                            'compass.fit',
                            'gamma.m',
+                           'omega',
                            'beta.true.final',
                            'beta.p',
                            'I',
@@ -650,9 +657,13 @@ stopCluster(cl)
 
 Check acceptance rate for sampler for COMPASS and COMPASScovariate (want 20% - 30%). If too low, need to tune the algorithm. 
 ```{r}
-summary(sim.out.list[[1]]$sim.fit$fit$A_gamma)
-
-summary(sim.out.list[[1]]$compass.fit$fit$fit$A_gamma)
+lapply(sim.out.list, FUN = function(fit) {
+  data.frame(
+    metric = c("Min", "Q1", "Median", "Mean", "Q3", "Max"),
+    COMPASScovar = as.numeric(summary(fit$sim.fit$fit$A_gamma)),
+    COMPASS = as.numeric(summary(fit$compass.fit$fit$fit$A_gamma))
+  )
+})
 ```
 
 
@@ -660,25 +671,53 @@ summary(sim.out.list[[1]]$compass.fit$fit$fit$A_gamma)
 
 #### Proportion Stim - Unstim vs Chemokine X
 
-```{r}
+```{r fig.width = 4, fig.height = 3}
 lapply(sim.out.list, FUN = function(sim) {
   #Find the differences in proportions between stim and unstim
   diff <- (sim$sim.fit$data$n_s / rowSums(sim$sim.fit$data$n_s)) - (sim$sim.fit$data$n_u / rowSums(sim$sim.fit$data$n_u))
   
-  #Subset to just the first cluster/marker
-  diff.df <- as.data.frame(diff[,1])
+  #Make a dataframe
+  diff.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
+                        diff
+  )
   
-  #Plot as a function of HIV status
-  qplot(x = diff.df$`diff[, 1]`,
-        y = as.factor(sim$sim.fit$data$meta$hiv)
-        # color = as.factor(sim$sim.fit$data$meta$hiv)
-  )+
-  # geom_jitter(width = 0.5)+
-  tidybayes::stat_halfeye()+
-  theme_bw()+
-  ylab("Cytokine X Presence")+
-  xlab("Prop. Stim - Prop. Unstim")+
-  scale_color_discrete(name = "HIV status")
+  #Rename columns
+  colnames(diff.df) <- gsub("^X", "cluster", colnames(diff.df))
+  
+  #Loop over each cluster/marker
+  plot.out.list <-
+    lapply(grep('cluster', colnames(diff.df), value = T), FUN = function(cluster) {
+      plot.out <-
+        #Plot as a function of HIV status
+        ggplot(data = diff.df %>%
+                          select(c(hiv,
+                                   {{cluster}}
+                          )
+                   ),
+                   aes_string(x = cluster,
+                              y = "hiv",
+                              fill = "hiv"
+                   )
+        )+
+        tidybayes::stat_halfeye()+
+        geom_jitter(width = 0,
+                    height = 0.1,
+                    alpha = 0.4,
+                    size = 0.7
+        )+
+        theme_bw()+
+        ylab("Cytokine X Presence")+
+        xlab("Prop. Stim - Prop. Unstim")+
+        scale_fill_discrete(name = "Cytokine X\npresence")+
+        scale_x_continuous(breaks = seq.default(from = -1,
+                                                to = 1, 
+                                                by = 0.005
+                           )
+        )+
+        labs(title = stringr::str_to_title({{cluster}}))
+    })
+  
+  return(plot.out.list)
 })
 ```
 
@@ -745,6 +784,74 @@ lapply(sim.out.list, FUN = function(sim) {
 
 ### Estimated Values
 
+#### Mean Gamma vs Omega
+
+```{r fig.width=6, fig.height=4}
+lapply(sim.out.list, FUN = function(sim) {
+
+  #Omega - mean_gamma
+  omega.gamma.diff.covar <- sim$omega - sim$sim.fit$fit$mean_gamma[,1:sim$K1]
+  omega.gamma.diff.compass <- sim$omega - sim$compass.fit$fit$fit$mean_gamma[,1:sim$K1]
+  colnames(omega.gamma.diff.compass) <- NULL
+  
+  #Create datasets
+  omega.gamma.diff.covar.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
+                                          omega.gamma.diff.covar
+  )
+  omega.gamma.diff.compass.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
+                                            omega.gamma.diff.compass
+  )
+  
+  #Combine datasets in long format
+  omega.gamma.diff.df <-
+    bind_rows(
+      omega.gamma.diff.covar.df %>%
+        mutate(model = "COMPASScovariate"),
+      omega.gamma.diff.compass.df %>%
+        mutate(model = "COMPASS")
+    )
+  
+  #Rename columns
+  colnames(omega.gamma.diff.df) <- gsub("^X", "cluster", colnames(omega.gamma.diff.df))
+  
+  #Histograms
+  hist.plot.list <-
+    lapply(grep('cluster', colnames(omega.gamma.diff.df), value = T), FUN = function(cluster) {
+      
+      #Make the histogram for the current cluster
+      hist.plot <-
+        ggplot(data = omega.gamma.diff.df %>%
+                      select(c(hiv,
+                               model,
+                               {{cluster}}
+                      )
+               ),
+               aes_string(x = cluster,
+                          fill = "hiv"
+               )
+        )+
+        geom_histogram(bins = 80)+
+        facet_grid(hiv ~ model)+
+        theme_bw()+
+        scale_x_continuous(breaks = seq.default(from = -1,
+                                                to = 1,
+                                                by = 0.25
+                          )
+        )+
+        scale_fill_discrete(name = "Cytokine X\npresence")+
+        ylab("Frequency")+
+        xlab("Omega - Mean Gamma")+
+        labs(title = stringr::str_to_title({{cluster}}))
+      
+      return(hist.plot)
+    })
+  
+  return(hist.plot.list)
+  
+})
+```
+
+
 #### Gammma from COMPASScovariate vs COMPASS
 
 ```{r}
@@ -752,23 +859,45 @@ lapply(sim.out.list, FUN = function(sim) {
   #Find the differences in mean gamma matrices between COMPASS and COMPASScovariate
   mean.gamma.diff <- sim$sim.fit$fit$mean_gamma - sim$compass.fit$fit$fit$mean_gamma
   
+  #Subset columns where there are any differences
   mean.gamma.diff <- mean.gamma.diff[, abs(colSums(mean.gamma.diff)) > 0]
   
-  #Subset to the first subset/marker
-  mean.gamma.diff.df <- data.frame(cluster1 = mean.gamma.diff[,1])
+  #Remove colnames
+  colnames(mean.gamma.diff) <- NULL
   
-  #Plot as a function of HIV status
-  qplot(x = mean.gamma.diff.df$cluster1,
-        # x = sim$sim.fit$data$meta$age,
-        y = as.factor(sim$sim.fit$data$meta$hiv)
-  )+
-  tidybayes::stat_halfeye()+
-  # geom_jitter(width = 0.25)+
-  theme_bw()+
-  scale_color_discrete(name = "HIV status")+
-  ylab("Cytokine X Presence")+
-  xlab("Mean Gamma COMPASScov - COMPASS")
+  #Create datasets
+  mean.gamma.diff.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
+                                   mean.gamma.diff
+  )
   
+  #Rename columns
+  colnames(mean.gamma.diff.df) <- gsub("^X", "cluster", colnames(mean.gamma.diff.df))
+  
+  #Histograms
+  plot.list <-
+    lapply(grep('cluster', colnames(mean.gamma.diff.df), value = T), FUN = function(cluster) {
+    
+      plot <-
+        ggplot(data = mean.gamma.diff.df %>%
+                        select(c(hiv,
+                                 {{cluster}}
+                        )
+                 ),
+                 aes_string(x = cluster,
+                            y = "hiv"
+                 )
+        )+
+        tidybayes::stat_halfeye()+
+        geom_jitter(width = 0,
+                    height = 0.1
+        )+
+        theme_bw()+
+        ylab("Cytokine X Presence")+
+        xlab("Mean Gamma COMPASScov - COMPASS")+
+        labs(title = stringr::str_to_title({{cluster}}))
+      
+      return(plot)
+    })
 })
 ```
 
@@ -777,31 +906,29 @@ lapply(sim.out.list, FUN = function(sim) {
 Is the precision of the estimates lower for COMPASS without a covariate?
 
 ```{r}
-dim(sim.out.list[[1]]$sim.fit$fit$mean_gamma)
-
-#Posterior draws for gamma[1,1] from COMPASScovariate
-
-
-#Posterior draws for gamma[1,1] from COMPASS
-lapply(1:K, FUN = function(k) {
-  print(
-    paste(
-      c("Var for COMPASScovariate:",
-        var(sim.out.list[[1]]$sim.fit$fit$gamma[2,k,]),
-        "Var for COMPASS:",
-        var(sim.out.list[[1]]$compass.fit$fit$fit$gamma[2,k,])
-      )
+#Loop over columns
+apply(
+  #Find differences in variance between COMPASS - COMPASScov for all I x K
+  apply(sim.out.list[[1]]$compass.fit$fit$fit$gamma, MARGIN = c(1,2), var) - 
+    apply(sim.out.list[[1]]$sim.fit$fit$gamma, MARGIN = c(1,2), var),
+  MARGIN = 2,
+  FUN = function(x) {
+    
+    #Make a dataframe of the Kth subset var diffs
+    dat = data.frame(
+      diff.precision = x
     )
-  )
-})
-
-
+    
+    #Plot a histogram of the var diffs
+    ggplot(data = dat,
+           aes(x = diff.precision)
+    )+
+    geom_histogram()
+  }
+)
+  
 ```
 
-
-```{r}
-(sim.out.list[[1]]$sim.fit$data$n_s / rowSums(sim.out.list[[1]]$sim.fit$data$n_s)) - (sim.out.list[[1]]$sim.fit$data$n_u / rowSums(sim.out.list[[1]]$sim.fit$data$n_u))
-```
 
 
 #### Mean Gamma vs Prop Stim - Unstim
