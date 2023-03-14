@@ -15,3 +15,5 @@ shinyTest
 \#*
 tests/testthat/Rplots.pdf
 R/SimpleCOMPASS.patch
+*.html
+*.png
