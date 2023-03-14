@@ -1,4 +1,4 @@
-.COMPASS.covariate <- function(n_s, n_u, iterations, replications, X,
+.COMPASS.covariate <- function(n_s, n_u, categories, iterations, replications, X,
                               verbose=TRUE, init_with_fisher = FALSE, ...) {
 
   vmessage <- function(...)
@@ -155,17 +155,30 @@
       }
     }
   }
+
+  # iterative MCMC sample storage
   alpha_u[1,] = alpha_u[N,]
   gamma[,,1] = gamma[,,N]
   alpha_s[1,] = alpha_s[N,]
-  A_gm = array(as.integer(0), dim=c(I,N));
-  A_alphau = array(as.integer(0), dim=c(K,N));
-  A_alphas = array(as.integer(0), dim=c(K,N));
 
-  # TODO: implement replications from discrete so thinning is built-in.
-  sNN=replications ## number of 'replications' -- should be user defined
-  vmessage("Fitting model with ", sNN, " replications.")
-  for (stt in 1:sNN) {
+  # arrays to store final thinned samples
+  thin_gm = array(as.integer(0), dim=c(I,K,N));
+  thin_alphau = array(as.integer(0), dim=c(N,K));
+  thin_alphas = array(as.integer(0), dim=c(N,K));
+  thin_beta =  array(as.integer(0), dim=c(K1,p1, N))
+
+
+
+  sNN=replications + 1 ## number of 'replications' -- should be user defined +1 for burnin
+  vmessage("Keeping ", N, " iterations. We'll thin every ", sNN-1, " iterations.")
+
+  # thin by the number of iterations.
+  thin_by = sNN-1
+
+  #Run one extra replication for burn in
+  for (stt in 1:(sNN + 1)) {
+    if (stt == 1) vmessage("Burnin for ", N, " iterations...")
+    else if (stt == 2) vmessage("Sampling ", N * (sNN - 1), " iterations...")
     vmessage("Running replication ", stt, " of ", sNN, "...")
     for (tt in 2:N) {
       # update alphau
@@ -201,22 +214,32 @@
       lambda2 = res4$lambda2
       beta[,,tt] = res4$beta
       if (tt %% 1000 == 0) vmessage("Iteration ", tt, " of ", iterations, ".")
+      if ((tt %% thin_by) == 0 && stt > 1) {
+        #store thinned samples
+        thin_alphau[(stt - 2) * as.integer(N / thin_by) + tt %/% thin_by,] <- alpha_u[tt,]
+        thin_alphas[(stt - 2) * as.integer(N / thin_by) + tt %/% thin_by,] <- alpha_s[tt,]
+        thin_gm[,, (stt - 2) * as.integer(N / thin_by) + tt %/% thin_by] <- gamma[,, tt]
+        thin_beta[,, (stt - 2) * as.integer(N / thin_by) + tt %/% thin_by] <- beta[,, tt]
+      }
     }
     if (stt == sNN) {break}
     alpha_u[1,] = alpha_u[N,];
     gamma[,,1] = gamma[,,N];
     alpha_s[1,] = alpha_s[N,];
-    A_gm = array(as.integer(0), dim=c(I,N));
-    A_alphau = array(as.integer(0), dim=c(K,N));
-    A_alphas = array(as.integer(0), dim=c(K,N));
   }
 
   ######################################
+  alpha_u = thin_alphau
+  alpha_s = thin_alphas
+  gamma = thin_gm
+  beta = thin_beta
+
+  dimnames(gamma) <- list(rownames(n_s), NULL, NULL)
   Nburn=0;
   Mgamma = mat.or.vec(I,K);
   Nseq = seq(Nburn+1,N,by=1)
   for (ttt in Nseq) {
-    Mgamma = Mgamma + gamma[,,ttt]; #thining
+    Mgamma = Mgamma + gamma[,,ttt]; #thinning if needed change here
   }
   Mgamma = Mgamma/(N-Nburn);
 
@@ -224,36 +247,37 @@
 
   ###
   ## Guess the marker names
-  marker_names <- unique(
-    unlist( strsplit( gsub("!", "", colnames(n_s)), "&", fixed=TRUE ) )
-  )
-  n_markers <- length(marker_names)
-  cats <- as.data.frame( matrix(0, nrow=ncol(n_s), ncol=n_markers) )
-  rownames(cats) <- colnames(n_s)
-  colnames(cats) = marker_names
-
-  for (i in seq_along(cats)) {
-    #cats[, i] <- as.integer(grepl( paste0( colnames(cats)[i], "+" ), rownames(cats), fixed=TRUE ))
-    cats[,i] <-
-      as.integer(!grepl(paste0("!",colnames(cats)[i],"(&|$)+"),rownames(cats),fixed =
-                          FALSE))
-  }
-  cats$Counts <- apply(cats, 1, sum)
-  cats <- as.matrix(cats)
+  # marker_names <- unique(
+  #   unlist( strsplit( gsub("!", "", colnames(n_s)), "&", fixed=TRUE ) )
+  # )
+  # n_markers <- length(marker_names)
+  # cats <- as.data.frame( matrix(0, nrow=ncol(n_s), ncol=n_markers) )
+  # rownames(cats) <- colnames(n_s)
+  # colnames(cats) = marker_names
+  #
+  # for (i in seq_along(cats)) {
+  #   #cats[, i] <- as.integer(grepl( paste0( colnames(cats)[i], "+" ), rownames(cats), fixed=TRUE ))
+  #   cats[,i] <-
+  #     as.integer(!grepl(paste0("!",colnames(cats)[i],"(&|$)+"),rownames(cats),fixed =
+  #                         FALSE))
+  # }
+  # cats$Counts <- apply(cats, 1, sum)
+  # cats <- as.matrix(cats)
   ###
 
-  # cats <- categories[, - ncol(categories), drop = FALSE]
-  # subsets_df <- as.data.frame(cats)
-  # for (i in seq_along(subsets_df)) {
-  #   tmp <- subsets_df[[i]]
-  #   subsets_df[[i]] <- paste0(
-  #     swap(tmp, c(0, 1), c("!", "")),
-  #     colnames(subsets_df)[[i]]
-  #   )
-  # }
-  # subsets <- do.call(function(...) paste(..., sep = "&"), subsets_df)
-  #
-  # colnames(Mgamma) <- subsets
+  cats <- categories[, - ncol(categories), drop = FALSE]
+  subsets_df <- as.data.frame(cats)
+  for (i in seq_along(subsets_df)) {
+    tmp <- subsets_df[[i]]
+    subsets_df[[i]] <- paste0(
+      #swap(tmp, c(0, 1), c("!", "")),
+      gsub("1", "",gsub("0", "!", tmp)),
+      colnames(subsets_df)[[i]]
+    )
+  }
+  subsets <- do.call(function(...) paste(..., sep = "&"), subsets_df)
+
+  colnames(Mgamma) <- subsets
 
 
   ## set names on the output
@@ -266,7 +290,7 @@
     gamma=gamma,
     mean_gamma=Mgamma,
     A_gamma=rowMeans(A_gm),
-    categories = cats,
+    categories = categories,
     model="covariate"
   )
 
