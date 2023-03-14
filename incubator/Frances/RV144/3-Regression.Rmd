@@ -1,0 +1,475 @@
+---
+title: "RV144 Regression"
+
+author:
+
+                - "Frances Hung"
+
+                - "Biostatistics, Epidemiology and Research Design (BERD) Core"
+
+                - "Center for Human Systems Immunology (CHSI)"
+
+date: "`r  Sys.Date()`"
+
+output:
+
+  html_document:
+
+    toc: true
+
+    toc_float: true
+
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE,message = FALSE)
+options(knitr.duplicate.label = 'allow')
+
+```
+
+
+```{r cars}
+#library(Kmisc)
+#library(COMPASS)
+library(ggplot2)
+library(gridExtra)
+#library(data.table.extras)
+library(osDesign)
+library(pROC)
+library(plyr)
+library(reshape2)
+library(formattable)
+library(gridExtra)
+library(data.table)
+library(RColorBrewer)
+library(tidyverse)
+```
+
+
+
+```{r primVars, options}
+source("Regression/my.tps.function.R")
+source("Regression/primaryinferences_cch.r")
+# the other primary covariates
+source("Regression/primaryinferences_main_090111.r")
+primVars <- dat %>%
+  select(pin,
+         primary_iga_score_tomaras_wk26,
+         primary_avidity_a244_gdneg_delta11_alam_wk26, 
+         primary_adcc_luc_92th023_evans_wk26,
+         primary_nab_tzmbl_a3r5_auc_afrims_siriraj_montefiori_wk26,
+         primary_v2_gp70_v1v2_zollapazner_wk26) %>%
+  rename(PTID_orig=pin,
+         IgAprim=primary_iga_score_tomaras_wk26,
+         Avidprim=primary_avidity_a244_gdneg_delta11_alam_wk26, 
+         ADCCprim=primary_adcc_luc_92th023_evans_wk26,
+         NAbprim=primary_nab_tzmbl_a3r5_auc_afrims_siriraj_montefiori_wk26,
+         V2prim=primary_v2_gp70_v1v2_zollapazner_wk26)
+# linking IDs
+orig <- read.csv("Regression/PTID_map_case_control.csv", header=T, sep=",")
+
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# FUNCTION for getting mean gamma with default 50% burn-in, no thin
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+mean_gam <- function(gammaSamps, percburn) {
+  N=dim(gammaSamps)[3]
+  Nburn=round(percburn*N);
+  Mgamma = mat.or.vec(dim(gammaSamps)[1],dim(gammaSamps)[2]);
+  Nseq = seq(Nburn+1,N,by=1)
+  for (ttt in Nseq) {
+    Mgamma = Mgamma + gammaSamps[,,ttt]; #thining
+  }
+  Mgamma = Mgamma/(N-Nburn);
+  return(Mgamma)
+}
+```
+
+
+
+
+```{r source, echo=FALSE}
+# load in RV144COMPASSOrig and RV144COMPASScovar
+load("RV144COMPASS.RData")
+
+#meta data from COMPASS original
+metaOrig <- RV144COMPASSOrig$data$meta
+meta <- metaOrig
+fit <- RV144COMPASSOrig
+
+```
+
+## Regression Model
+
+We're missing some meta information (Avidprim, ADCCprim, and NAbprim) from the COMPASS object meta-data, so we use a separate CSV to match the meta information with a PID (different from the PTID).
+
+
+We then use the below framework to fit a linear model for the following outcomes for both original and COMPASS-covariate:
+
+- Each gate's mean gamma
+- PFS
+- FS
+
+```{r org, options}
+qvals <- function(fit, dat, orig, PFSname, FSname) {
+qvalsDF <- data.frame(matrix(ncol = 7, nrow=0))
+
+
+I <- dim(fit$data$n_s)[1] #subjects
+K <- dim(fit$data$n_s)[2] #categories
+T <- dim(fit$fit$alpha_s)[1] #
+K1 <- K-1
+M <- dim(fit$data$categories)[2]-1
+Cnames <- colnames(fit$data$n_s)
+## get the vaccination and infection status for individuals in the n_s/n_u
+## note: all individuals in n_s are in the metadata
+indiv <- rownames(fit$data$n_s) #individual PTIDs
+meta <- fit$data$meta
+vacc <- unique(meta[ meta$PTID %in% indiv, c("PTID", "vaccine")])
+vacc <- vacc[ match(indiv, vacc$PTID), ]
+rownames(vacc) <- 1:nrow(vacc)
+
+infect <- unique(meta[ meta$PTID %in% indiv, c("PTID", "infect")])
+infect <- infect[ match(indiv, infect$PTID), ]
+rownames(infect) <- 1:nrow(infect)
+
+PFS <- unique(meta[ meta$PTID %in% indiv, c("PTID", PFSname)])
+PFS <- PFS[ match(indiv, PFS$PTID), ]
+rownames(PFS) <- 1:nrow(PFS)
+
+FS <- unique(meta[ meta$PTID %in% indiv, c("PTID", FSname)])
+FS <- FS[ match(indiv, FS$PTID), ]
+rownames(FS) <- 1:nrow(FS)
+
+#meta should be already ordered by PTID like mean gamma; get rid of all-zero columns
+meanGams <- fit$fit$mean_gamma %>% as.data.frame() %>% rownames_to_column(var="PTID") %>%
+  select(where(~any(.x!=0)))
+
+# meanGams <- mean_gam(fit$fit$gamma, 0.5) %>% as.data.frame() %>% 
+#   rownames_to_column(var="PTID") %>% select(where(~any(.x!=0)))
+
+rownames(meanGams) <- 1:nrow(meanGams)
+
+
+#######################
+## get explanatory variables for regression
+rPTID =  unique(orig[,2:3])
+colnames(rPTID) = c("PTID", "PTID_orig")
+
+## meta$PTID <- swap( meta$PTID, rPTID$PTID_orig, rPTID$PTID )
+sel_outcome <- NULL #reorder n_s/n_u according to dat$pin
+sel_c <- NULL # which dat$pin maps with indiv
+PTID_sub <- NULL
+
+for (ii in 1:length(dat$pin)) {
+  tpp = which(indiv == rPTID[which(rPTID[,2]==dat$pin[ii]),1])
+  if(length(tpp) >1){
+    cat(ii)
+  }
+  if (length(tpp)>0) {
+    sel_c = c(sel_c, ii)
+    sel_outcome = c(sel_outcome, tpp)
+    PTID_sub<- c(PTID_sub, rPTID[rPTID[,1] == indiv[tpp],2])
+  }
+}
+
+## already have this information: Lynn is merging flow with metadata here
+flrstatus = flrstatus[sel_c]
+IgAprim = IgAprim[sel_c]
+V2prim = V2prim[sel_c]
+NAbprim = NAbprim[sel_c]
+
+Avidprim <- Avidprim[sel_c]
+ADCCprim <- ADCCprim[sel_c]
+
+CD4ICSprim  <- CD4ICSprim[sel_c] 
+
+sex = sex[sel_c]
+risk.medium = risk.medium[sel_c]
+risk.high = risk.high[sel_c]
+stratuminds = stratuminds[sel_c]
+
+outcomeDF <- meanGams %>% inner_join(PFS) %>%
+  inner_join(FS)
+
+for (i in 2:ncol(outcomeDF)) {
+##### original 6 primary variables ###
+pvalues <- NULL
+pnames <- NULL
+OR <- NULL
+#outcome = scale(as.vector(fit$fit$mean_gamma[sel_outcome,23]))
+outcome = scale(as.vector(outcomeDF[sel_outcome,i])) # can replace this with PFS, FS, mean gamma as needed
+fit.tps <- try(tps(flrstatus ~ outcome + IgAprim +V2prim+NAbprim +Avidprim+ADCCprim+ 
+                     sex + risk.medium + risk.high,nn0=nn0, nn1=nn1,group=stratuminds,method="PL",cohort=TRUE),silent=TRUE) 
+
+for(ii in 2:7){
+  x <- as.matrix(cbind(fit.tps$coef[ii], round(exp(fit.tps$coef[ii]),3),round(exp(fit.tps$coef[ii] - sqrt(fit.tps$covm[ii,ii])*1.96),3),
+                       round(exp(fit.tps$coef[ii] + sqrt(fit.tps$covm[ii,ii])*1.96),3),round(min(2*(1-pnorm(abs(fit.tps$coef[ii]/sqrt(fit.tps$covm[ii,ii])))),1.0),4)))
+  colnames(x)<-c("Coef","OR","CI.low","CI.up","p-value")
+  pvalues <- c(pvalues, x[5])
+  OR <- c(OR, x[2])
+  pnames <- c(pnames, names(fit.tps$coef)[ii])
+}
+
+names(pvalues) <- pnames
+qvalues <- c(colnames(outcomeDF)[i], p.adjust(pvalues, method = "fdr", n = length(pvalues)))
+qvalsDF <- qvalsDF %>% rbind(qvalues)
+colnames(qvalsDF) <- c("outcomeName",pnames)
+
+}
+qvalsDF %>%
+    mutate(outcomeName = ifelse(str_detect(outcomeName, "&"), map_chr(str_extract_all(outcomeName, "\\!|&\\!|&")
+                          , ~ str_c(.x,collapse = "")) %>%
+             str_replace_all("\\!|(&\\!)","-") %>% str_replace_all("&","\\+"), outcomeName)) %>%
+  # missing + for first cytokine if it is positive
+    mutate(outcomeName = ifelse(nchar(outcomeName)==5, paste0("+", outcomeName), outcomeName))
+}
+
+
+```
+
+
+## COMPASS-original 
+
+```{r}
+origQvals <- qvals(fit, dat, orig,  "PFSRV144",  "FSRV144")
+
+origQvals %>% 
+  formattable()
+```
+
+## COMPASS-covar
+
+```{r}
+covarfit <- RV144COMPASSCovar
+covarQvals <- qvals(covarfit, dat, orig,  "PFSRV144covar", "FSRV144covar") 
+
+covarQvals %>%
+  formattable()
+
+```
+
+## Q vals Chart
+
+```{r qcharts, options}
+covarQvals %>%
+  mutate(type="covar") %>%
+  rbind(origQvals %>%
+              mutate(type="original")) %>%
+  mutate(outcome=as.numeric(outcome)) %>%
+  group_by(outcomeName) %>%
+  filter(any(outcome<0.1)) %>%
+  mutate(outcomeName=ifelse(outcomeName=="PFSRV144covar", "PFSRV144", outcomeName)) %>%
+  ggplot(aes(x=outcomeName, y=outcome, fill=type)) +
+  geom_bar(stat="identity", position = "dodge") +
+  ylab("Q-value") +
+  xlab("Outcome") +
+  ggtitle("Q-values for Covar vs. Original Outcomes with Q-value < 0.1")
+```
+
+```{r setup, options}
+covarMeta <- covarfit$data$meta
+```
+
+
+## Volcano Plot
+
+Original on top and covariate on bottom:
+
+```{r volcano, fig.height=10}
+gates<- c("!TNFa&!IFNg&IL4&IL2&CD154&!IL17a", "TNFa&IFNg&IL4&IL2&CD154&!IL17a")
+
+#function for finding proportion rowwise from counts
+propT <- function(df) {
+  df %>% as.data.frame() %>%
+  mutate(sumCounts = rowSums(across(contains("&")))) %>%
+  # proportion across all gates 
+    mutate(across(contains("&"), ~ .x/sumCounts)) %>%
+    select(-c(sumCounts))
+}
+
+#mean gamma for the chosen gates
+covarVolc <- covarfit$fit$mean_gamma %>% as.data.frame() %>%
+  .[,gates] %>%
+  rownames_to_column(var="PTID") %>%
+  pivot_longer(-PTID, names_to="Gate", values_to="MeanGam") %>%
+#join with propdiffs
+  inner_join((propT(covarfit$data$n_s) %>%
+  .[,gates]-
+  propT(covarfit$data$n_u) %>%
+  .[,gates]) %>%
+    rownames_to_column(var="PTID") %>%
+    pivot_longer(-PTID, names_to="Gate", values_to="PropDiff")) %>%
+# join with nu
+  inner_join(covarfit$data$n_u %>%
+               as.data.frame() %>%
+               .[,gates] %>%
+    rownames_to_column(var="PTID") %>%
+    pivot_longer(-PTID, names_to="Gate", values_to="N")) %>%
+# plot
+  ggplot(aes(x=PropDiff, y=MeanGam, size=N)) +
+  geom_point() +
+  facet_wrap(.~Gate)
+  
+
+#mean gamma for the chosen gates
+origVolc<-fit$fit$mean_gamma %>% as.data.frame() %>%
+  .[,gates] %>%
+  rownames_to_column(var="PTID") %>%
+  pivot_longer(-PTID, names_to="Gate", values_to="MeanGam") %>%
+#join with propdiffs
+  inner_join((propT(fit$data$n_s) %>%
+  .[,gates]-
+  propT(fit$data$n_u) %>%
+  .[,gates]) %>%
+    rownames_to_column(var="PTID") %>%
+    pivot_longer(-PTID, names_to="Gate", values_to="PropDiff")) %>%
+# join with nu
+  inner_join(fit$data$n_u %>%
+               as.data.frame() %>%
+               .[,gates] %>%
+    rownames_to_column(var="PTID") %>%
+    pivot_longer(-PTID, names_to="Gate", values_to="N")) %>%
+# plot
+  ggplot(aes(x=PropDiff, y=MeanGam, size=N)) +
+  geom_point() +
+  facet_wrap(.~Gate)
+
+
+grid.arrange(origVolc, covarVolc)
+
+```
+
+## AUC
+
+```{r auc, options}
+aucDF <- covarfit$data$meta %>%
+  left_join(RV144COMPASSOrig$data$meta) %>%
+  select(PTID, FSRV144covar, FSRV144, PFSRV144covar, PFSRV144, vaccine)
+
+scoreNames <- c("FSRV144covar", "FSRV144", "PFSRV144covar", "PFSRV144")
+
+rocs <- lapply(scoreNames, function(x) {
+  roc(aucDF$vaccine, aucDF[[x]])
+})
+
+roc_dt <- lapply(1:length(rocs), function(x) {
+  data.table(
+    Sensitivity=rocs[[x]]$sensitivities,
+    Specificity=rocs[[x]]$specificities,
+    Type=scoreNames[[x]]
+  )
+})
+
+bind_rows(roc_dt) %>%
+  group_by(Type) %>%
+  arrange(Sensitivity) %>%
+  ungroup() %>%
+  ggplot(aes(x=1-Specificity, y=Sensitivity, color=Type)) +
+  geom_line() +
+  geom_abline(a=0, b=1, lty='dashed')+theme_bw()
+```
+
+## FS and PFS by placebo vs vaccine
+
+```{r placVSvaccine, options}
+######################################
+##### boxplot for PI, FS, and PFS#####
+######################################
+
+covarfit$data$meta %>%
+  left_join(RV144COMPASSOrig$data$meta) %>%
+  select(PTID, FSRV144covar, FSRV144, PFSRV144covar, PFSRV144, vaccine) %>%
+  pivot_longer(-c(PTID,vaccine), names_to = "ScoreType", values_to = "Score") %>%
+# make column for covar vs. original
+  mutate(Type=ifelse(str_detect(ScoreType,"covar"), "Covar", "Orig"),
+         ScoreType = str_remove_all(ScoreType,"covar")) %>%
+# plot faceting by Type
+  ggplot(aes(x=vaccine, y=Score)) +
+  geom_boxplot() +
+  geom_jitter() +
+  facet_wrap(Type~ScoreType) 
+
+# wilcoxon test for original COMPASS
+wilcox.test(metaOrig %>% filter(vaccine=="VACCINE") %>% .$PFSRV144,
+            metaOrig %>% filter(vaccine=="PLACEBO") %>% .$PFSRV144,
+            alternative = "two.sided")
+
+# wilcoxon test for covariate COMPASS
+wilcox.test(covarMeta %>% filter(vaccine=="VACCINE") %>% .$PFSRV144covar,
+            covarMeta %>% filter(vaccine=="PLACEBO") %>% .$PFSRV144covar,alternative = "two.sided")
+
+```
+
+## Logistic Regression
+
+We run logistic regressions on infection status given outcome, IgA level, sex, and risk score.
+
+```{r log-reg, options}
+
+#function for inverse-logit
+invLog <- function(t)
+{
+  1/(1+exp(-t))
+}
+
+
+#define covariate values
+noInfectedMetaCovar <- covarfit$data$meta %>% as.data.frame() %>% filter(!is.na(stratuminds))
+noInfectedMetaOrig <- fit$data$meta %>% as.data.frame() %>% filter(!is.na(stratuminds))
+flrstatus <- noInfectedMetaCovar$flrstatus
+IgAprim <-noInfectedMetaCovar$IgAprim
+sex <- noInfectedMetaCovar$sex
+risk.medium <- noInfectedMetaCovar$risk.medium
+risk.high <- noInfectedMetaCovar$risk.high
+stratuminds <- noInfectedMetaCovar$stratuminds
+
+#outcomes to test
+outcomeDF <- noInfectedMetaCovar %>% as.data.frame() %>%
+  select(PTID, PFSRV144covar, FSRV144covar) %>%
+  inner_join(noInfectedMetaOrig %>% 
+               as.data.frame() %>%
+  select(PTID, PFSRV144, FSRV144))
+
+#store predicted probabilities in 226 x 4 frame
+predDF <- data.frame(matrix(ncol = 4, nrow=nrow(noInfectedMetaCovar)))
+
+for (i in 2:ncol(outcomeDF)) {
+  outcome <- outcomeDF[,i]
+  fit.tps <- try(tps(flrstatus ~ outcome + IgAprim + sex + risk.medium + risk.high,nn0=nn0, nn1=nn1,group=stratuminds,method="PL",cohort=TRUE),silent=TRUE)
+  
+  # get the coefs, OR, CI's, p-value
+  coeffs <- as.matrix(fit.tps$coef)
+  X <- cbind(1, outcome, IgAprim, sex, risk.medium, risk.high)
+
+  # we plug in covariates to get predicted prob
+  predDF[,i-1] <- invLog(X%*%coeffs)
+
+}
+
+colnames(predDF) <- colnames(outcomeDF)[2:5]
+
+predDF <- predDF %>% cbind(flrstatus)
+
+rocs <- lapply(colnames(predDF), function(x) {
+  roc(predDF$flrstatus, predDF[[x]])
+})
+
+roc_dt <- lapply(1:length(rocs), function(x) {
+  data.table(
+    Sensitivity=rocs[[x]]$sensitivities,
+    Specificity=rocs[[x]]$specificities,
+    Type=colnames(predDF)[[x]]
+  )
+})
+
+bind_rows(roc_dt) %>%
+  group_by(Type) %>%
+  arrange(Sensitivity) %>%
+  ungroup() %>%
+  ggplot(aes(x=1-Specificity, y=Sensitivity, color=Type)) +
+  geom_line() +
+  geom_abline(a=0, b=1, lty='dashed')+theme_bw()
+
+```

@@ -98,36 +98,38 @@ Protocol <- "Pro00086822"
 # 
 # names(antiBDList)<-ZeExcelsheets
 
+# the RDATA file provided by Lynn containing original paper's COMPASS object
 load(file="~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144-2023-02-09.rda")
 
-#unstim counts: unfiltered
-nU_unfiltered <- rv144$data$n_u
-#stim counts: unfiltered
-nS_unfiltered <- rv144$data$n_s
-#covariates: unfiltered
-meta_unfiltered <- rv144$data$meta %>%
+#unstim counts
+nU <- rv144$data$n_u %>% as.data.frame()
+#stim counts
+nS <- rv144$data$n_s %>% as.data.frame()
+#covariates
+meta <- rv144$data$meta %>%
   select(-c(PFS, FS))
 
 #########################################################
-# Filter out patients missing V2prim or Luminex here
+# Filter out patients missing Luminex here: none
 #########################################################
-meta <- meta_unfiltered %>%
-  filter(!is.na(V2prim) & !is.na(Luminex))
+# meta <- meta_unfiltered %>%
+#   filter(!is.na(Luminex))
+# 
+# nS <- nS_unfiltered %>% as.data.frame() %>%
+#   rownames_to_column(var="PTID") %>%
+# # remove patients with missing covariates
+#   right_join(meta %>% select(PTID), by = "PTID") %>%
+#   `rownames<-`(.$PTID) %>%
+#   select(-PTID)
+#   
+# nU <- nU_unfiltered %>% as.data.frame() %>%
+#   rownames_to_column(var="PTID") %>%
+# # remove patients with missing covariates
+#   right_join(meta %>% select(PTID), by = "PTID") %>%
+#   `rownames<-`(.$PTID) %>%
+#   select(-PTID)
 
-nS <- nS_unfiltered %>% as.data.frame() %>%
-  rownames_to_column(var="PTID") %>%
-# remove patients with missing covariates
-  right_join(meta %>% select(PTID), by = "PTID") %>%
-  `rownames<-`(.$PTID) %>%
-  select(-PTID)
-  
-nU <- nU_unfiltered %>% as.data.frame() %>%
-  rownames_to_column(var="PTID") %>%
-# remove patients with missing covariates
-  right_join(meta %>% select(PTID), by = "PTID") %>%
-  `rownames<-`(.$PTID) %>%
-  select(-PTID)
-
+# aggregate nS and nU into one flow matrix
 flow_agg <- nU %>% mutate(Stimulation="noStim") %>%
   rownames_to_column(var="PTID") %>%
   rbind(nS %>% mutate(Stimulation="Stim") %>%
@@ -140,6 +142,7 @@ flow_agg <- nU %>% mutate(Stimulation="noStim") %>%
 #--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
 #source("~/CTOT/cmv_palmer_pro00102592/readInDataDCC.R")
 source("~/CHSI/compass-covariate/R/COMPASS-covariate.R")
+#source("~/CHSI/PackageDev/COMPASScovariate/R/COMPASS-discrete.R")
 source("~/CHSI/compass-covariate/R/updatebeta.R")
 source("~/CHSI/compass-covariate/R/utils.R")
 
@@ -163,16 +166,15 @@ We consider `r nrow(meta)` RV144 patients:
 
 In the original COMPASS paper, PFS and FS scores were used as covariates in logistic and Cox-PH models, along with sex, risk groups, and 5 other primary variables. The original RV144 paper finds that IgA binding and V2 binding are directly and inversely correlated with infection.
 
-When we run COMPASS-covar, we only use V2prim and luminex as covariates in order to potentially improve PFS score estimates. We don't cut gates for now because all of the gates pass the sparsity condition.
+When we run COMPASS-covar, we only use Luminex as a covariate in order to potentially improve PFS score estimates. We don't cut gates for now because all of the gates pass the sparsity condition.
 
-TODO: the original COMPASS uses more observations than the covariate since some patients have missing covariates. Re-run original?
 
 ```{r, options}
 
 # raw antibody data cleaned so key field names match up with demographic DF
 antibodyDF <- meta %>%
   arrange(PTID) %>%
-  select(PTID, V2prim, Luminex)
+  select(PTID, Luminex)
 ```
 
 ```{r funcs, options}
@@ -307,7 +309,7 @@ return(corPlot)
 
 ## Logging/Scaling Antibody Measures
 
-We don't need to transform the covariates (V2prim and Luminex) except for log-scaling Luminex because it ranges from 0-1. The below histogram  shows the untransformed covariates and the violin plot shows the covariates after scaling the logged Luminex (if Luminex = 0, then we take log(Luminex + 0.001)).
+We log-scale Luminex because it ranges from 0-1. The below histogram  shows the untransformed covariates and the violin plot shows the covariates after scaling the logged Luminex (if Luminex = 0, then we take log(Luminex + 0.001)).
 
 
 ```{r ex-scale-log, options}
@@ -372,14 +374,13 @@ antibodyDF_transf %>%
 ```
 We look at the placebo flow differences to see if they could potentially drastically change our results:
 
-```{r placebo, options}
-flow_freqDiffs(flow_agg)
-```
+
 
 ```{r COMPASS-orig, options}
 #-------------------------------------------------------------------------
 # FUNCTION for COMPASS 
 # takes in flow data frame, and suffix for naming rds file
+# TODO: fix to use COMPASS discrete?
 #-------------------------------------------------------------------------
 COMPASS_orig <- function(flowDF_cut, metaDF, postfix) {
   
@@ -405,9 +406,9 @@ COMPASS_orig <- function(flowDF_cut, metaDF, postfix) {
   
   # n_s (I x K), n_u (I x K), iters, replications, X (I x J)
   starttime = Sys.time()
-  COMPASScovarobj <- COMPASS::SimpleCOMPASS(n_s = n_s,
+  COMPASScovarobj <- SimpleCOMPASS(n_s = n_s,
                                    n_u = n_u,
-                                   meta = metaDF,
+                                   meta=metaDF,
                                    individual_id = "PTID",
                                    iterations = 200000,
                                    replications = 1)
@@ -608,6 +609,8 @@ OGmeanGam %>%
     mutate(Gate = map_chr(str_extract_all(Gate, "&\\!|&")
                           , ~ str_c(.x,collapse = "")) %>%
              str_replace_all("&\\!","-") %>% str_replace_all("&","\\+")) %>%
+  # missing + for first cytokine if it is positive
+    mutate(Gate = ifelse(nchar(Gate)==5, paste0("+", Gate), Gate)) %>%
   # boxplots faceted by gate, colored by COMPASS type
   ggplot(aes(x=COMPASStype, y=MeanGamma, color=COMPASStype)) + geom_boxplot() +
     geom_point() +
@@ -720,7 +723,7 @@ set.seed(100)
 
 COMPASSorig<- readRDS("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASSorig200000_seed100_cut.rds")$COMPASScovarobj$fit
 
-RV144COMPASSorig <- rv144
+RV144COMPASSorig <- rv144$fit
 
 #compareGammaBoxplot(COMPASSorig, COMPASScovarV2Lum, meta)
 ```
@@ -767,9 +770,9 @@ n_s <- flow_agg %>% filter(Stimulation=="Stim") %>%
 
 ```{r compass-covar-CD4_notsparse, fig.height=10}
 set.seed(100)
-#COMPASS_covar(flow_agg, X, "V2Lum")
+#COMPASS_covar(flow_agg, X, "Lum")
 
-COMPASScovarV2Lum<- readRDS("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASScovar200000_seed100_V2Lum.rds")$COMPASScovarobj
+COMPASScovarV2Lum<- readRDS("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASScovar200000_seed100_Lum.rds")$COMPASScovarobj
 
 
 compareGammaBoxplot(COMPASSorig, COMPASScovarV2Lum, meta)
@@ -818,8 +821,14 @@ compareGammaDF <- function(pp65COMPASSAim2, COMPASScovarAim2, metaDF, percBurn=0
 }
 ```
 
+
+There are quite a few patients who have dramatic changes in mean gamma. The below sorted table of mean gammas, raw Luminex score, and scaled flow differences indicates that these dramatic changes consist of patients consist of people with either Luminex scores or large flow differences.
+
 ```{r mean-gamma-changes, fig.height=12}
-#patients whose mean gamma changes past the 0.5 threshold for at least one gate, or whose mean gamma changes by at least 0.2
+# inverse cdf
+quantInv <- function(distr, value) ecdf(distr)(value)
+
+#patients whose mean gamma changes past the 0.5 threshold for at least one gate
 changingPats <- compareGammaDF(COMPASSorig, COMPASScovarV2Lum, meta) %>%
   pivot_wider(names_from = COMPASStype, 
               values_from = MeanGamma) %>%
@@ -830,8 +839,46 @@ changingPats <- compareGammaDF(COMPASSorig, COMPASScovarV2Lum, meta) %>%
   filter(Flag) %>% ungroup() %>%
   distinct()
 
+#quantiles of differences
+diffquants <- flow_freqDiffs(flow_agg) %>%
+  ungroup() %>%
+  pivot_longer(cols = -c(PTID), names_to = "Gate", values_to = "values") %>%
+    simpGates() %>%
+  drop_na() %>%
+  arrange(Gate) %>%
+  group_by(Gate) %>%
+  mutate(medGate = median(values),
+         quantDiff = percent_rank(values)) %>%
+# join with flagged pats
+  left_join(changingPats %>% select(PTID, Gate,Flag)) %>%
+  replace_na(list(Flag=FALSE)) %>%
+# join with Luminex
+  left_join(antibodyDF_transf) 
+
+# plot quantile diffs vs. Luminex, colored by flagged
+diffquants %>%
+  ggplot(aes(x=quantDiff, y=Luminex, color=Flag))+
+  geom_point() + facet_wrap(.~Gate, scales="free")
+
 changingPats %>% 
   select(-c(OGlessThreshold, CovarlessThreshold, Flag)) %>%
+# join with Luminex and standardized differences of flow gates
+  left_join(antibodyDF_transf)  %>%
+  left_join(flow_freqDiffs(flow_agg) %>%
+  ungroup() %>%
+  pivot_longer(cols = -c(PTID), names_to = "Gate", values_to = "values") %>%
+    simpGates() %>%
+  drop_na()) %>%
+# scale differences over all gates
+  # simpGates() %>% mutate(`Standardized Gate Diffs`=scale(values))) %>%
+  #select(-values) %>%
+  arrange(desc(abs(Covar-Original))) %>%
+# find gate diff means/sds
+  group_by(Gate) %>%
+  mutate(GateMean=mean(values),
+         GateSD = sd(values))  %>%
+# find quantile of where value lies on gate diff
+  mutate(valsQuant = percent_rank(values)) %>%
   datatable(rownames = FALSE, options = list(
   pageLength = 5, autoWidth = TRUE))
 
@@ -849,13 +896,14 @@ changingFlow <-flow_freqDiffs(flow_agg) %>%
 
 flow_freqDiffs(flow_agg) %>%
   ungroup() %>%
-  pivot_longer(cols = -c(PTID), names_to = "Vars", values_to = "values") %>%
+  pivot_longer(cols = -c(PTID), names_to = "Gate", values_to = "values") %>%
   drop_na() %>%
+  simpGates() %>%
   mutate(lessthan0Diff = values <0) %>%
   left_join(changingPats %>% select(PTID, Flag)) %>%
   ggplot(aes(x= values)) + 
   geom_histogram() + geom_vline(data=changingFlow, aes(xintercept=values, color=n), alpha=0.3) + 
-  facet_wrap(.~Vars,scales="free_x", ncol = 3) +
+  facet_wrap(.~Gate,scales="free_x", ncol = 3) +
   ggtitle("Changed Patients: Differences in Stim-noStim Flow") +
   xlab("Value") +
   theme(legend.position="bottom",
@@ -940,17 +988,9 @@ To see whether any of these are meaningful, we can look at confidence intervals 
 betaTable(COMPASScovarV2Lum, flow_agg %>% select(-PTID), X)
 ```
 
-As a visual check, we make scatterplots of Luminex and V2prim vs. difference in flow gate proportion.
+As a visual check, we make scatterplots of Luminex vs. difference in flow gate proportion.
 
 ```{r scatterplot-sig-cd4, fig.height=20}
-flow_freqDiffs(flow_agg) %>%
-  pivot_longer(-PTID, names_to = "Gate", values_to = "FreqDiffs") %>%
-  simpGates() %>%
-  left_join(antibodyDF_transf) %>%
-  joinMeta(meta) %>%
-  ggplot(aes(x=V2prim, y = FreqDiffs, color=infect)) + geom_point(alpha=0.5) +
-    facet_wrap(.~Gate, scales = "free", ncol=3)
-  
 
 flow_freqDiffs(flow_agg) %>%
   pivot_longer(-PTID, names_to = "Gate", values_to = "FreqDiffs") %>%
@@ -1058,42 +1098,6 @@ PFSscatterplot(RV144PFS_DF)
 ```
 
 
-```{r agg-PFS,eval=FALSE}
-logistic_results <- function(df) {
-
-logModOrig <- glm(infect ~ PFSRV144,
-                 family = "binomial", df)
-
-
-
-logModCovar <- glm(infect ~ PFSRV144covar,
-                 family = "binomial", df)
-
-
-
-summary(logModOrig)$coef %>% 
-  as.data.frame() %>% select(-`z value`) %>% 
-  bind_rows(summary(logModCovar)$coef %>% 
-              as.data.frame() %>% select(-`z value`)) %>%
-  rownames_to_column() %>%
-  # `rownames<-`(c( "CD4PFS", 
-  #                "CD8PFS","CD4PFS-Covar",
-  #                "CD8PFS-Covar")) %>%
-  `colnames<-`(c("Coefficient", "Adjusted Hazard Ratio","SE of Coefficient", "P-value")) %>% mutate(across(where(is.numeric), ~round(.x,2))) %>% 
-  # datatable()
-# %>%
-  kable(col.names = c("Coefficient",
-                      "Adjusted Hazard Ratio",
-                      "SE of Coefficient", "P-value"), digits = 3) %>%
-  kable_classic() %>%
-  pack_rows("Orig", start_row=1, end_row=2) %>%
-  pack_rows("Covar", start_row=3, end_row=4) 
-}
-
-logistic_results(RV144PFS_DF)
-```
-
-
 
 
 ### FS Scores
@@ -1167,37 +1171,6 @@ df %>%
 
 FSplot(FSRV144_DF)
 FSscatterplot(FSRV144_DF)
-```
-
-
-```{r agg-FS, eval=FALSE}
-df <- FSRV144_DF
-logModOrig <- glm(infect ~ FSRV144 ,
-                 family = "binomial", df)
-
-
-
-logModCovar <- glm(infect ~ FSRV144covar,
-                 family = "binomial", df)
-
-
-summary(logModOrig)$coef %>% 
-  as.data.frame() %>% select(-`z value`) %>% 
-  bind_rows(summary(logModCovar)$coef %>% 
-              as.data.frame() %>% select(-`z value`)) %>%
-  rownames_to_column() %>%
-  # `rownames<-`(c( "CD4PFS", 
-  #                "CD8PFS","CD4PFS-Covar",
-  #                "CD8PFS-Covar")) %>%
-  `colnames<-`(c("Coefficient", "Adjusted Hazard Ratio","SE of Coefficient", "P-value")) %>% mutate(across(where(is.numeric), ~round(.x,2))) %>% 
-  # datatable()
-# %>%
-  kable(col.names = c("Coefficient",
-                      "Adjusted Hazard Ratio",
-                      "SE of Coefficient", "P-value"), digits = 3) %>%
-  kable_classic() %>%
-  pack_rows("Original", start_row=1, end_row=2) %>%
-  pack_rows("Covariate", start_row=3, end_row=4) 
 ```
 
 

@@ -1,0 +1,669 @@
+---
+title: "Including Antibody Covariates in RV144: Scaled Difference of Log Antibodies"
+
+author:
+
+                - "Frances Hung"
+
+                - "Biostatistics, Epidemiology and Research Design (BERD) Core"
+
+                - "Center for Human Systems Immunology (CHSI)"
+
+date: "`r  Sys.Date()`"
+
+output:
+
+  html_document:
+
+    toc: true
+
+    toc_float: true
+
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE,message = FALSE)
+options(knitr.duplicate.label = 'allow')
+
+```
+
+```{r Baseinfo,eval=FALSE}
+
+#General info ----------------------
+
+#
+
+# Created: 2022-02-09
+
+#
+
+# Author: Frances Hung
+
+#
+
+# Program: //duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/
+
+#             CRU/Immunology Center/
+
+#             Palmer/
+
+#             COMPASS-covar/compass-covariate/incubator/
+
+#             Rep-5-COMPASScovarAim2.RMD
+
+#
+
+# Description: Check overlap between flow and antibody data, then run COMPASS vs. COMPASS-covar analysis for Aim 2 CTOT patients.
+
+#--- --- --- --- --- --- --- --- --- --- --- --- ---
+
+#--- --- --- --- --- --- --- --- --- --- --- --- ---
+
+```
+
+```{r libs,message=FALSE, warning=FALSE, include=F, results='asis'}
+
+
+
+library(lubridate)
+library(kableExtra)
+library(survival)
+library(devtools)
+library(readxl)
+library(Rcpp)
+library(coda)
+library(DT)
+library(COMPASS)
+library(tidyverse)
+
+CRU<-"Immunology Center"
+PIname<-"Palmer"
+Protocol <- "Pro00086822"
+
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# Read in antibody data
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# pathtofile<-"//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro00086822"
+# 
+# TheFile<-"Data/Original/20220531_LungTxpProject_DataSummary_mjh.xlsx"
+# 
+# ZeExcelsheets<-excel_sheets(file.path(pathtofile,
+#                                       TheFile))
+# 
+# antiBDList<-lapply(ZeExcelsheets,function(x) read_excel(file.path(pathtofile,
+#                                                                TheFile),
+#                                                      sheet=x))
+# 
+# names(antiBDList)<-ZeExcelsheets
+
+load(file="~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144-2023-02-09.rda")
+
+#unstim counts: unfiltered
+nU_unfiltered <- rv144$data$n_u
+#stim counts: unfiltered
+nS_unfiltered <- rv144$data$n_s
+#covariates: unfiltered
+meta_unfiltered <- rv144$data$meta %>%
+  select(-c(PFS, FS))
+
+
+
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# All flow/demographic data pre-processing from readIn.R
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+#source("~/CTOT/cmv_palmer_pro00102592/readInDataDCC.R")
+source("~/CHSI/compass-covariate/R/COMPASS-covariate.R")
+source("~/CHSI/compass-covariate/R/updatebeta.R")
+source("~/CHSI/compass-covariate/R/utils.R")
+
+# source("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/Programs/git_pro00102592/0-Code/readInData.R")
+# source("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/COMPASS-covar/compass-covariate/R/COMPASS-covariate.R")
+# source("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/COMPASS-covar/compass-covariate/R/updatebeta.R")
+# source("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/COMPASS-covar/compass-covariate/R/utils.R")
+```
+
+# Introduction
+
+We consider `r nrow(meta_unfiltered)` RV144 patients:
+
+- Sex (sex: 0 or 1)
+- Risk (risk.medium, risk.high)
+- Age (age: Age <=20, Age >=26, Age 21-25)
+- IgAprim (the binding of plasma IgA antibodies to Env)
+- V2prim (the binding of IgG antibodies to variable region 2 (V2) of the gp120 Env)
+- Vaccine (vaccine: PLACEBO or VACCINE)
+- Stratum number (based on sex, # vaccines received out of 4) from https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3371689/)
+
+In the original COMPASS paper, PFS and FS scores were used as covariates in logistic and Cox-PH models, along with sex, risk groups, and 5 other primary variables. The original RV144 paper finds that IgA binding and V2 binding are directly and inversely correlated with infection.
+
+When we run COMPASS-covar, we only use V2prim and luminex as covariates in order to potentially improve PFS score estimates. We don't cut gates for now because all of the gates pass the sparsity condition.
+
+TODO: the original COMPASS uses more observations than the covariate since some patients have missing covariates. Re-run original?
+
+
+
+```{r funcs, options}
+
+
+#########################################################
+# Flow gate-related functions
+#########################################################
+
+#------------------------------------------------------
+# FUNCTION for getting categories matrix for flow counts
+# @params: flow DF
+# @output: category matrix
+#------------------------------------------------------
+getCats <- function(stim) {
+  # finding marker names and making category count matrix
+marker_names <- unique(
+    unlist( strsplit( gsub("!", "", colnames(stim)), "&", fixed=TRUE ) )
+  )
+  n_markers <- length(marker_names)
+
+  cats <- as.data.frame( matrix(0, nrow=ncol(stim), ncol=length(marker_names)))
+  rownames(cats) <- colnames(stim)
+  colnames(cats) = marker_names
+
+  for (i in seq_along(cats)) {
+    #cats[, i] <- as.integer(grepl( paste0( colnames(cats)[i], "+" ), rownames(cats), fixed=TRUE ))
+    cats[,i] <-
+      as.integer(!grepl(paste0("!",colnames(cats)[i],"(&|$)+"),rownames(cats),fixed =
+                          FALSE))
+  }
+  cats$Counts <- apply(cats, 1, sum)
+  
+  cats <- as.matrix(cats)
+}
+
+#------------------------------------------------------
+# FUNCTION for cutting gates by sparsity
+# @params: full flow DF (nostim and stim), included TheIDs
+# @output: flow DF without sparse gates
+#------------------------------------------------------
+cutGates <- function(flowDF, includedIDs=flowDF$PTID, negGate) {
+  # gate names to be excluded
+  excludedCellCats <- flowDF %>%
+    filter(PTID %in% includedIDs) %>%
+    select(Stimulation,contains("&")) %>%
+    filter(Stimulation=="noStim") %>%
+    select(!where(function(x) sum(x>=5)>=2)) %>%
+    colnames()
+  
+  # combined excluded cell counts
+  excludedCellCounts <- data.frame(exCount=flowDF %>% 
+  filter(PTID %in% includedIDs) %>%
+  select(all_of(excludedCellCats)) %>%
+  rowSums())
+  
+  return(flowDF %>% 
+  filter(PTID %in% includedIDs) %>%
+  select(contains("&")) %>%
+# exclude sparse categories
+  select(-all_of(excludedCellCats)) %>%
+# add back excluded cells as part of all-negative gate
+  cbind(excludedCellCounts) %>%
+  mutate(across(matches(negGate), ~ .x + exCount)) %>%
+  select(-exCount) %>%
+# add visit and stimulation information
+  cbind(flowDF %>% 
+  filter(PTID %in% includedIDs) %>% select(PTID, Stimulation)) %>%
+  relocate(PTID, Stimulation))
+}
+
+
+#---------------------------------------------------------------
+# FUNCTION for getting difference in flow frequency of cut gates
+# stim-noStim
+#---------------------------------------------------------------
+flow_freqDiffs <- function(flowDF_cut) {
+  # calculate freq of cut gates
+  flowDF_freqs <- flowDF_cut %>%
+    mutate(sumCounts = rowSums(across(contains("&")))) %>%
+  # proportion across all gates (because COMPASS includes the CD4 vs.CD8 gates)
+    mutate(across(contains("&"), ~ .x/sumCounts)) %>%
+    select(-c(sumCounts)) 
+  
+  #frequencies sum to 100
+  # flowDF_freqs %>% select(contains("Freq")) %>% rowSums()
+  
+  #get differences in frequencies for each patient
+  flowDF_freqDiffs <- flowDF_freqs %>%
+    group_by(PTID) %>%
+    summarise(across(contains("&"), ~ lag(.x) - .x)) %>%
+    drop_na()
+}
+
+#--------------------------------------------------------------------------------
+# FUNCTION for plotting correlation of transformed antibodies with flow frequency differences
+#--------------------------------------------------------------------------------
+corrPlot <- function(flowDF_cut, antibodyDat) {
+
+# differences in flow freq
+flowDF_freqDiffs <- flow_freqDiffs(flowDF_cut)
+
+
+# transformed antibody vs. flow correlation plot
+corPlot <- cor(flowDF_freqDiffs %>%
+  inner_join(antibodyDat) %>% ungroup() %>% select(-c(PTID))) %>%
+  as.data.frame() %>%
+  rownames_to_column() %>%
+# get rid of unneccessary cor comparisons: want flow vs. antibody only
+  filter(str_detect(rowname, "&")) %>%
+  select(-contains("&")) %>%
+# pivot longer for geom_tile
+  pivot_longer(cols = -rowname, 
+               names_to = "Antibody Measure",
+               values_to = "Correlation") %>%
+  rename(Gate=rowname) %>%
+  ggplot(aes(x=`Antibody Measure`, y=Gate, fill = `Correlation`)) +
+  geom_tile() + theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1)) +
+  scale_fill_gradient2(low = "purple", mid= "white",high = "red") +
+  ggtitle("Correlation between Gate Differences and Transformed Antibody Measures")
+
+return(corPlot)
+}
+
+
+
+
+
+
+```
+
+
+
+
+
+
+```{r cut-flow, fig.height=10}
+
+flow_all <- nU_unfiltered %>% as.data.frame() %>% mutate(Stimulation="noStim") %>%
+  rownames_to_column(var="PTID") %>%
+  rbind(nS_unfiltered %>% as.data.frame() %>% mutate(Stimulation="Stim") %>%
+  rownames_to_column(var="PTID"))  %>%
+  arrange(PTID)
+
+# flow data with cut gates
+#flowDat_cut <- cutGates(flow_agg, "!TNFa&!IFNg&!IL4&!IL2&!CD154&!IL17a")
+
+flow_freqDiffs(flow_all) %>%
+  pivot_longer(-PTID, names_to = "Gate", values_to = "Diffs") %>%
+  inner_join(meta_unfiltered) %>%
+  ggplot(aes(y=Diffs, x=vaccine)) + geom_boxplot() +
+  facet_wrap(.~Gate, scales = "free", ncol=4)
+
+```
+
+
+
+```{r COMPASS-orig, options}
+#-------------------------------------------------------------------------
+# FUNCTION for COMPASS 
+# takes in flow data frame, and suffix for naming rds file
+#-------------------------------------------------------------------------
+COMPASS_orig <- function(flowDF_cut, metaDF, postfix) {
+  
+  # magic code to make it work...
+  n_s <- flowDF_cut %>% filter(Stimulation=="Stim") %>%
+    arrange(PTID) %>%
+    `rownames<-`(.$PTID) %>%
+    select(-c(PTID, Stimulation)) %>%
+    as.matrix()
+  
+  n_u <- flowDF_cut %>% filter(Stimulation=="noStim") %>%
+    arrange(PTID) %>%
+    `rownames<-`(.$PTID) %>%
+    select(-c(PTID, Stimulation)) %>%
+    as.matrix()
+  
+  categories <- getCats(flowDF_cut %>% filter(Stimulation=="noStim") %>%
+    arrange(PTID) %>% 
+    `rownames<-`(.$PTID) %>%
+    select(-c(PTID, Stimulation)))
+  
+  I <- nrow(n_s)
+  
+  # n_s (I x K), n_u (I x K), iters, replications, X (I x J)
+  starttime = Sys.time()
+  COMPASSobj <- COMPASS::SimpleCOMPASS(n_s = n_s,
+                                   n_u = n_u,
+                                   meta = metaDF,
+                                   individual_id = "PTID",
+                                   iterations = 200000,
+                                   replications = 1)
+  endtime= Sys.time()
+
+saveRDS(list(COMPASSobj = COMPASSobj, runTime = endtime-starttime),
+          paste0("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASSorig200000_seed100_",postfix,".rds"))
+
+  
+# saveRDS(list(pp65COMPASSAim2_diffs = COMPASScovarAim2_diffs, runTime = endtime-starttime),
+#           paste0("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/COMPASS-covar/data/pp65Aim2diffsCOMPASS200000_seed100_",postfix,".rds"))
+rm(COMPASSobj)
+
+}
+```
+
+
+We try to modify the plot mean gamma function to only plot significant differences
+
+```{r gamma-diffs,fig.height=12}
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# FUNCTION for joining df with meta-data
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+joinMeta <- function(df, metaDF) {
+  df %>%
+    left_join(metaDF %>% select(PTID, infect)) %>%
+  mutate(infect = ifelse(!str_detect(toupper(infect), "NON"), "Infected", "Not Infected"))
+}
+
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# FUNCTION for renaming gates for easy reading
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+
+
+
+
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# FUNCTION for getting mean gamma with default 50% burn-in, no thin
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+mean_gam <- function(gammaSamps, percburn) {
+  N=dim(gammaSamps)[3]
+  Nburn=round(percburn*N);
+  Mgamma = mat.or.vec(dim(gammaSamps)[1],dim(gammaSamps)[2]);
+  Nseq = seq(Nburn+1,N,by=1)
+  for (ttt in Nseq) {
+    Mgamma = Mgamma + gammaSamps[,,ttt]; #thining
+  }
+  Mgamma = Mgamma/(N-Nburn);
+  return(Mgamma)
+}
+
+
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# FUNCTION for dataframe for COMPASS vs. COMPASS-covar gamma
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+compareGammaDF <- function(pp65COMPASSAim2, COMPASScovarAim2, metaDF, percBurn=0.5) {
+
+  # mean gamma with 50% burn-in: gammas are zero when they should be
+  OGmeanGam <- mean_gam(pp65COMPASSAim2$gamma, percBurn) %>%
+    `colnames<-`(colnames(COMPASScovarAim2$mean_gamma))
+  CovarmeanGam <- mean_gam(COMPASScovarAim2$gamma, percBurn) %>%
+    `colnames<-`(colnames(COMPASScovarAim2$mean_gamma))
+
+  OGmeanGam %>%
+    as.data.frame() %>%
+    rownames_to_column(var = "PTID") %>%
+    # join with event status
+    joinMeta(metaDF) %>%
+    pivot_longer(cols = -c(PTID, infect), names_to = "Gate",
+                 values_to = "MeanGamma") %>%
+    mutate(COMPASStype="Original") %>%
+    rbind(CovarmeanGam %>%
+            as.data.frame() %>%
+            mutate(PTID = rownames(OGmeanGam)) %>%
+            joinMeta(metaDF)  %>%
+  pivot_longer(cols = -c(PTID, infect), names_to = "Gate", 
+               values_to = "MeanGamma") %>%
+  mutate(COMPASStype="Covar")) %>% 
+    mutate(COMPASStype = factor(COMPASStype, levels=c("Original", "Covar"))) %>%
+    mutate(Gate = map_chr(str_extract_all(Gate, "\\!|&\\!|&")
+                          , ~ str_c(.x,collapse = "")) %>%
+             str_replace_all("\\!|(&\\!)","-") %>% str_replace_all("&","\\+")) %>%
+  # missing + for first cytokine if it is positive
+    mutate(Gate = ifelse(nchar(Gate)==5, paste0("+", Gate), Gate))
+}
+
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# FUNCTION for boxplot comparing COMPASS vs. COMPASS-covar gamma
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+compareGammaBoxplot <- function(pp65COMPASSobj, COMPASScovarobj, metaDF, percBurn=0.5) {
+
+# Original RV144 COMPASS has extra obs
+OGmeanGam <- mean_gam(pp65COMPASSobj$gamma[metaDF$PTID,,], percBurn) %>%
+  `colnames<-`(colnames(COMPASScovarobj$mean_gamma))
+CovarmeanGam <- mean_gam(COMPASScovarobj$gamma, percBurn) %>%
+  `colnames<-`(colnames(COMPASScovarobj$mean_gamma))
+
+# patients with most difference in mean gamma
+changingPats <- compareGammaDF(RV144COMPASSorig, COMPASSorig, metaDF) %>%
+  pivot_wider(names_from = COMPASStype, 
+              values_from = MeanGamma) %>%
+  mutate(OGlessThreshold = Original < 0.5,
+         CovarlessThreshold = Covar < 0.5,
+         Flag = (OGlessThreshold & !CovarlessThreshold) |
+           (!OGlessThreshold & CovarlessThreshold)) %>%
+  filter(Flag) %>% ungroup() %>%
+  distinct() %>%
+  select(-c(Flag, OGlessThreshold, CovarlessThreshold)) %>%
+  # pivot longer for plotting
+  pivot_longer(cols=c(Covar, Original), names_to = "ScoreType", values_to = "Values")
+
+OGmeanGam %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "PTID") %>%
+# join with event status
+  left_join(metaDF %>% select(PTID, infect)) %>%
+  pivot_longer(cols = -c(PTID, infect), names_to = "Gate", 
+               values_to = "MeanGamma") %>%
+  mutate(COMPASStype="Original",
+         event = ifelse(!str_detect(toupper(infect),"NON"), "Infected", "Uninfected")) %>%
+  rbind(CovarmeanGam %>%
+  as.data.frame() %>%
+  mutate(PTID = rownames(OGmeanGam)) %>%
+# join with event status
+  left_join(metaDF %>% select(PTID, infect)) %>%
+  pivot_longer(cols = -c(PTID, infect), names_to = "Gate", 
+               values_to = "MeanGamma") %>%
+  mutate(COMPASStype="Covar",
+         event = ifelse(!str_detect(toupper(infect),"NON"), "Infected", "Uninfected"))) %>%
+    mutate(COMPASStype = factor(COMPASStype, levels=c("Original", "Covar"))) %>%
+    mutate(Gate = map_chr(str_extract_all(Gate, "&\\!|&")
+                          , ~ str_c(.x,collapse = "")) %>%
+             str_replace_all("&\\!","-") %>% str_replace_all("&","\\+")) %>%
+  # boxplots faceted by gate, colored by COMPASS type
+  ggplot(aes(x=COMPASStype, y=MeanGamma, color=COMPASStype)) + geom_boxplot() +
+    geom_point(data=changingPats, aes(x=ScoreType, y=Values, color=ScoreType)) +
+  geom_line(data=changingPats, aes(x=ScoreType, y=Values,group=PTID), color="black", alpha=0.5) +
+  facet_grid(cols = vars(event),rows = vars(Gate))
+  
+}
+
+#compareGammaBoxplot(pp65COMPASSAim2, COMPASScovarAim2_diffs)
+```
+
+
+
+# COMPASS vs. COMPASS-covariate: Mean Gamma and Beta
+
+## Antibody COMPASS-covar
+
+
+```{r todebug, include=FALSE}
+
+n_s <- flow_all %>% filter(Stimulation=="Stim") %>%
+    arrange(PTID) %>%
+  `rownames<-`(.$PTID) %>%
+    select(-c(PTID, Stimulation)) %>%
+    as.matrix()
+  
+  n_u <- flow_all %>% filter(Stimulation=="noStim") %>%
+    arrange(PTID) %>%
+    `rownames<-`(.$PTID) %>%
+    select(-c(PTID, Stimulation)) %>%
+    as.matrix()
+  
+  categories <- getCats(flow_all %>% filter(Stimulation=="noStim") %>%
+    arrange(PTID) %>% 
+    `rownames<-`(.$PTID) %>%
+    select(-c(PTID, Stimulation)))
+  I <- nrow(n_s)
+  
+  # n_s (I x K), n_u (I x K), iters, replications, X (I x J)
+  starttime = Sys.time()
+  COMPASScovarobj <- COMPASS::SimpleCOMPASS(n_s = n_s,
+                                   n_u = n_u,
+                                   meta = meta_unfiltered,
+                                   individual_id = "PTID",
+                                   iterations = 10,
+                                   replications = 1)
+  endtime= Sys.time()
+```
+
+```{r compass-covar-CD4_notsparse, fig.height=10}
+set.seed(100)
+#COMPASS_orig(flow_all, meta_unfiltered,"full")
+
+COMPASSorig<- readRDS("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASSorig200000_seed100_cut.rds")$COMPASSobj$fit
+
+RV144COMPASSorig <- rv144$fit
+
+compareGammaBoxplot(RV144COMPASSorig, COMPASSorig, meta_unfiltered)
+```
+
+
+
+
+```{r mean-gamma-changes, fig.height=12}
+#patients whose mean gamma changes past the 0.5 threshold for at least one gate, or whose mean gamma changes by at least 0.2
+changingPats <- compareGammaDF(RV144COMPASSorig, COMPASSorig, meta_unfiltered) %>%
+  pivot_wider(names_from = COMPASStype, 
+              values_from = MeanGamma) %>%
+  mutate(OGlessThreshold = Original < 0.5,
+         CovarlessThreshold = Covar < 0.5,
+         Flag = (OGlessThreshold & !CovarlessThreshold) |
+           (!OGlessThreshold & CovarlessThreshold)) %>%
+  filter(Flag) %>% ungroup() %>%
+  distinct()
+
+changingPats %>% 
+  select(-c(OGlessThreshold, CovarlessThreshold, Flag)) %>%
+  datatable(rownames = FALSE, options = list(
+  pageLength = 5, autoWidth = TRUE))
+```
+
+
+The acceptance rate for gamma for COMPASS is plotted on the below x-axis and the acceptance rate for gamma for COMPASS-covariate is plotted on the below y-axis.
+
+```{r gamma-a-CD4}
+cbind(x=RV144COMPASSorig$A_gamma, y=COMPASSorig$A_gamma) %>%
+  as.data.frame() %>%
+  ggplot(aes(x=x,y=y)) +
+  geom_point() +
+  geom_abline() +
+  xlab("Original COMPASS Acceptance Rate") +
+  ylab("COMPASS-redone Acceptance Rate") +
+  ggtitle("Gamma Acceptance Rates")
+```
+
+
+
+
+We can also plot boxplots of the differences in flow proportions (pp65-noStim) for each gate.
+
+```{r boxplot-flow-diffs, eval=FALSE}
+flow_freqDiffs(flowAim2_cut_CD4) %>%
+  select(-`CD4+CD107a-IFNg-IL-2-TNFa- | Freq`) %>%
+  pivot_longer(cols=-TheID, names_to="Gate", values_to = "Difference") %>%
+  ggplot(aes(x=Gate, y=Difference)) + geom_boxplot() +
+  coord_flip()
+
+```
+
+
+
+# PFS/FS Cox Models 
+
+We can calculate PFS scores and FS scores for RV144 COMPASS. 
+
+We get two sets of PFS scores:
+
+-   RV144 COMPASS original
+-   RV144 COMPASS re-run
+
+I've checked that the two COMPASS objects have the same data matrices for n_s, n_u, categories, and meta. The only differences are that I've sorted the counts matrices in order of increasing PTID. TODO: It's strange that I'm getting different PFS then, though everything is on the same scale.
+
+### PFS Scores Without 3 "Independent" Covariates
+
+```{r}
+PolyfunctionalityScore <- function(x, degree, n,percBurn=0.5) {
+  
+  xmeanGam <- mean_gam(x$gamma, percBurn) %>%
+  `colnames<-`(colnames(x$mean_gamma))
+  
+  degree <- x$categories[, "Counts"]
+  n <- ncol(x$categories) - 1
+  y <- xmeanGam
+  pfs = apply(y, 1, function(row) {
+    ## (2 / (n+1)) is a factor that normalized the score between 0 and 1
+    sum(row * degree / choose(n, degree)) / n * (2 / (n + 1))
+  })
+  return(pfs)
+}
+
+PFSOrig <- PolyfunctionalityScore(RV144COMPASSorig) %>% as.data.frame() %>%
+  rownames_to_column(var="PTID") %>%
+  arrange(PTID) %>%
+  `colnames<-`(c("PTID","PFSRV144"))
+
+PFSOrig2 <- PolyfunctionalityScore(COMPASSorig) %>% as.data.frame() %>%
+  rownames_to_column(var="PTID") %>%
+  arrange(PTID ) %>%
+  `colnames<-`(c("PTID","PFSRV144Rerun"))
+
+
+OrigCompareDF <- inner_join(PFSOrig, PFSOrig2, by ="PTID") %>%
+# joining with demographic information
+  inner_join(meta_unfiltered) 
+
+```
+
+We plot these polyfunctionality scores by infection status.
+
+```{r pfs-plot}
+#-------------------------------------------
+# FUNCTION for PFS boxplots (infected vs. uninfected)
+#-------------------------------------------
+PFSplot <- function(df){
+
+df %>%
+  mutate(event = ifelse(!str_detect(toupper(infect), "NON"),
+                        "Infected", "Uninfected")) %>%
+  select(event, PTID, PFSRV144, PFSRV144Rerun) %>%
+  pivot_longer(cols = -c(PTID, event), names_to = "Type", values_to = "Value") %>%
+  ggplot(aes(x=Type, y = Value, color = event)) + geom_boxplot(outlier.shape = NA) + geom_point(position = position_jitterdodge(0.05, seed = 47)) +
+  ylab("Polyfunctional Score")
+  
+}
+
+#-------------------------------------------
+# FUNCTION for PFS scatterplots
+#-------------------------------------------
+PFSscatterplot <- function(df){
+
+df %>%
+    select(infect, PTID, PFSRV144, PFSRV144Rerun) %>%
+  mutate(event = ifelse(!str_detect(toupper(infect), "NON"),
+                        "Infected", "Uninfected")) %>%
+  ggplot(aes(x=PFSRV144, y=PFSRV144Rerun)) + geom_point() +
+    geom_abline() +
+  ylab("Covariate PFS Score") +
+    xlab("Original PFS Score")
+  
+}
+
+PFSplot(OrigCompareDF)
+PFSscatterplot(OrigCompareDF)
+```
+
+
+# Session Info
+
+```{r sessioninfo}
+
+sessionInfo()
+
+```
