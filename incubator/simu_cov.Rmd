@@ -116,6 +116,40 @@ Treatment group (HIV):
   + Compare mean gamma (estimates of probability of response) to true probabilities instead of comparing gamma. Find the differences for both COMPASS and COMPASScovariate, then find the difference in those differences to look for subject-cell types. 
   + Increase magnitude of stimulation betas -- draw them from uniform(1,2)
 
+**Notes from meeting on 2/28/23**
+
+- Concentration_s and concentration_u are the same for all subjects, fixed not drawn from log-normal (manually specify them)
+- Do not use Dirichlet-Multinomial because can't normalize p_s
+- Determine p_u first, then create p_s for gamma == 1 and normalize before adding back to vector. This allows for p_s and p_u to be the same value when gamma == 1 (required by COMPASS). Because of this, there has to be more than 1 gamma == 1 because of the constraint that we can't change a single p_s without changing the others in that case.
+
+Code from Lynn to make Kth subset have much higher counts
+alpha_u[1, 1:(K - 1)] = 10 #initializaion 
+  alpha_u[1, K] = 150
+  
+  alpha_s[1, 1:(K - 1)] = 10 #initialization 
+  alpha_s[1, K] = 100
+  
+**Toy example for normalization**
+
+```{r}
+gamma = c(0, 1, 1, 0,
+          1, 0, 1, 0
+)
+
+alpha.u = c(10, 10, 10, 100)
+alpha.s = c(50, 50, 50, 100)
+
+alpha.s = X
+
+p_u = rdirichlet(n = 1, alpha = alpha.u)
+
+p_s = p_u
+
+p_s[2:3] = rdirichlet(n = 1, alpha = alpha.s[2:3]) * sum(p_u[gamma == 1])
+
+sum(p_s)
+```
+
 ## Simulate Data and Run COMPASScovariate
 
 **Approach**
