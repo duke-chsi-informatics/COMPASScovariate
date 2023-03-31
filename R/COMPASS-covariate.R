@@ -245,25 +245,6 @@
 
   vmessage("Done!")
 
-  ###
-  ## Guess the marker names
-  # marker_names <- unique(
-  #   unlist( strsplit( gsub("!", "", colnames(n_s)), "&", fixed=TRUE ) )
-  # )
-  # n_markers <- length(marker_names)
-  # cats <- as.data.frame( matrix(0, nrow=ncol(n_s), ncol=n_markers) )
-  # rownames(cats) <- colnames(n_s)
-  # colnames(cats) = marker_names
-  #
-  # for (i in seq_along(cats)) {
-  #   #cats[, i] <- as.integer(grepl( paste0( colnames(cats)[i], "+" ), rownames(cats), fixed=TRUE ))
-  #   cats[,i] <-
-  #     as.integer(!grepl(paste0("!",colnames(cats)[i],"(&|$)+"),rownames(cats),fixed =
-  #                         FALSE))
-  # }
-  # cats$Counts <- apply(cats, 1, sum)
-  # cats <- as.matrix(cats)
-  ###
 
   cats <- categories[, - ncol(categories), drop = FALSE]
   subsets_df <- as.data.frame(cats)

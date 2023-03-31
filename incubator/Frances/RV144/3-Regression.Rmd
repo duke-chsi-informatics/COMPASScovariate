@@ -61,7 +61,7 @@ primVars <- dat %>%
          primary_adcc_luc_92th023_evans_wk26,
          primary_nab_tzmbl_a3r5_auc_afrims_siriraj_montefiori_wk26,
          primary_v2_gp70_v1v2_zollapazner_wk26) %>%
-  rename(PTID_orig=pin,
+  dplyr::rename(PTID_orig=pin,
          IgAprim=primary_iga_score_tomaras_wk26,
          Avidprim=primary_avidity_a244_gdneg_delta11_alam_wk26, 
          ADCCprim=primary_adcc_luc_92th023_evans_wk26,
@@ -162,6 +162,7 @@ sel_outcome <- NULL #reorder n_s/n_u according to dat$pin
 sel_c <- NULL # which dat$pin maps with indiv
 PTID_sub <- NULL
 
+#linking datasets via the pin and rPTID
 for (ii in 1:length(dat$pin)) {
   tpp = which(indiv == rPTID[which(rPTID[,2]==dat$pin[ii]),1])
   if(length(tpp) >1){
@@ -194,12 +195,11 @@ outcomeDF <- meanGams %>% inner_join(PFS) %>%
   inner_join(FS)
 
 for (i in 2:ncol(outcomeDF)) {
-##### original 6 primary variables ###
+##### regression with original 5 primary variables and ith outcome###
 pvalues <- NULL
 pnames <- NULL
 OR <- NULL
-#outcome = scale(as.vector(fit$fit$mean_gamma[sel_outcome,23]))
-outcome = scale(as.vector(outcomeDF[sel_outcome,i])) # can replace this with PFS, FS, mean gamma as needed
+outcome = scale(as.vector(outcomeDF[sel_outcome,i])) # PFS, FS, mean gamma as needed
 fit.tps <- try(tps(flrstatus ~ outcome + IgAprim +V2prim+NAbprim +Avidprim+ADCCprim+ 
                      sex + risk.medium + risk.high,nn0=nn0, nn1=nn1,group=stratuminds,method="PL",cohort=TRUE),silent=TRUE) 
 
@@ -219,11 +219,11 @@ colnames(qvalsDF) <- c("outcomeName",pnames)
 
 }
 qvalsDF %>%
-    mutate(outcomeName = ifelse(str_detect(outcomeName, "&"), map_chr(str_extract_all(outcomeName, "\\!|&\\!|&")
+    dplyr::mutate(outcomeName = ifelse(str_detect(outcomeName, "&"), map_chr(str_extract_all(outcomeName, "\\!|&\\!|&")
                           , ~ str_c(.x,collapse = "")) %>%
              str_replace_all("\\!|(&\\!)","-") %>% str_replace_all("&","\\+"), outcomeName)) %>%
   # missing + for first cytokine if it is positive
-    mutate(outcomeName = ifelse(nchar(outcomeName)==5, paste0("+", outcomeName), outcomeName))
+    dplyr::mutate(outcomeName = ifelse(nchar(outcomeName)==5, paste0("+", outcomeName), outcomeName))
 }
 
 
@@ -252,20 +252,53 @@ covarQvals %>%
 
 ## Q vals Chart
 
-```{r qcharts, options}
-covarQvals %>%
-  mutate(type="covar") %>%
+```{r qcharts, fig.height=12}
+qValsDF <- covarQvals %>%
+  rename(outcomeCoef=outcome) %>%
+  dplyr::mutate(type="covar") %>%
   rbind(origQvals %>%
+          rename(outcomeCoef=outcome) %>%
               mutate(type="original")) %>%
-  mutate(outcome=as.numeric(outcome)) %>%
-  group_by(outcomeName) %>%
-  filter(any(outcome<0.1)) %>%
-  mutate(outcomeName=ifelse(outcomeName=="PFSRV144covar", "PFSRV144", outcomeName)) %>%
-  ggplot(aes(x=outcomeName, y=outcome, fill=type)) +
+  dplyr::mutate(outcomeCoef=as.numeric(outcomeCoef)) %>%
+  #group_by(outcomeName) %>%
+  #filter(any(outcome<0.1)) %>%
+  dplyr::mutate(outcomeName=case_when(outcomeName=="PFSRV144covar" ~ "PFSRV144",
+                                      outcomeName == "FSRV144covar" ~ "FSRV144",
+                                      TRUE ~ outcomeName)) %>%
+  dplyr::mutate(across(outcomeCoef:ADCCprim, ~as.numeric(.x))) %>%
+  pivot_longer(-c(outcomeName,type), names_to = "var", values_to = "qval") 
+
+qValsDF %>%
+  ggplot(aes(x=var, y=qval, fill=type)) +
   geom_bar(stat="identity", position = "dodge") +
+  facet_wrap(.~outcomeName) +
+  theme(axis.text.x = element_text(angle=45, vjust=1, hjust=1)) +
   ylab("Q-value") +
   xlab("Outcome") +
-  ggtitle("Q-values for Covar vs. Original Outcomes with Q-value < 0.1")
+  ggtitle("Q-values for Covar vs. Original Outcomes")
+  
+qValsDF %>%
+  pivot_wider(names_from = type, values_from = qval) %>%
+  ggplot(aes(x=original, y=covar)) +
+  geom_point() + geom_abline(slope=1, intercept=0) +
+  xlab("Original Q-value") +
+  ylab("Covariate Q-value") +
+  ggtitle("Q-values for Covar vs. Original Outcomes")
+
+qValsDF %>%
+  pivot_wider(names_from = type, values_from = qval) %>%
+  mutate(diffs=(original-covar)) %>%
+  filter(var=="outcomeCoef") %>%
+  arrange(desc(diffs)) %>%
+  unite(recID, c("var",
+                 "outcomeName"), sep="_", remove=FALSE) %>%
+  ggplot(aes(x=reorder(outcomeName,-diffs), y=diffs)) + geom_col() +
+  labs(x="Regression Covariates", y="Difference in Q-values (Original-Covariate)") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  ggtitle("Difference in Q-values (Original-Covariate) for Mean Gamma, PFS, and FS") +
+  theme_classic()
+
+ggsave("./Regression/Plots/qvalDiffs.png", height = 6, width = 15)
 ```
 
 ```{r setup, options}
@@ -278,14 +311,14 @@ covarMeta <- covarfit$data$meta
 Original on top and covariate on bottom:
 
 ```{r volcano, fig.height=10}
-gates<- c("!TNFa&!IFNg&IL4&IL2&CD154&!IL17a", "TNFa&IFNg&IL4&IL2&CD154&!IL17a")
+gates<- c("!TNFa&IFNg&!IL4&!IL2&!CD154&!IL17a", "!TNFa&IFNg&!IL4&IL2&!CD154&!IL17a")
 
 #function for finding proportion rowwise from counts
 propT <- function(df) {
   df %>% as.data.frame() %>%
-  mutate(sumCounts = rowSums(across(contains("&")))) %>%
+  dplyr::mutate(sumCounts = rowSums(across(contains("&")))) %>%
   # proportion across all gates 
-    mutate(across(contains("&"), ~ .x/sumCounts)) %>%
+    dplyr::mutate(across(contains("&"), ~ .x/sumCounts)) %>%
     select(-c(sumCounts))
 }
 
@@ -302,7 +335,7 @@ covarVolc <- covarfit$fit$mean_gamma %>% as.data.frame() %>%
     rownames_to_column(var="PTID") %>%
     pivot_longer(-PTID, names_to="Gate", values_to="PropDiff")) %>%
 # join with nu
-  inner_join(covarfit$data$n_u %>%
+  inner_join(covarfit$data$n_s %>%
                as.data.frame() %>%
                .[,gates] %>%
     rownames_to_column(var="PTID") %>%
@@ -326,7 +359,7 @@ origVolc<-fit$fit$mean_gamma %>% as.data.frame() %>%
     rownames_to_column(var="PTID") %>%
     pivot_longer(-PTID, names_to="Gate", values_to="PropDiff")) %>%
 # join with nu
-  inner_join(fit$data$n_u %>%
+  inner_join(fit$data$n_s %>%
                as.data.frame() %>%
                .[,gates] %>%
     rownames_to_column(var="PTID") %>%
@@ -337,7 +370,9 @@ origVolc<-fit$fit$mean_gamma %>% as.data.frame() %>%
   facet_wrap(.~Gate)
 
 
-grid.arrange(origVolc, covarVolc)
+
+
+ggsave("./Regression/Plots/volcano.png",grid.arrange(origVolc, covarVolc))
 
 ```
 
@@ -383,7 +418,7 @@ covarfit$data$meta %>%
   select(PTID, FSRV144covar, FSRV144, PFSRV144covar, PFSRV144, vaccine) %>%
   pivot_longer(-c(PTID,vaccine), names_to = "ScoreType", values_to = "Score") %>%
 # make column for covar vs. original
-  mutate(Type=ifelse(str_detect(ScoreType,"covar"), "Covar", "Orig"),
+  dplyr::mutate(Type=ifelse(str_detect(ScoreType,"covar"), "Covar", "Orig"),
          ScoreType = str_remove_all(ScoreType,"covar")) %>%
 # plot faceting by Type
   ggplot(aes(x=vaccine, y=Score)) +

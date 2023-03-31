@@ -72,31 +72,13 @@ library(kableExtra)
 library(survival)
 library(devtools)
 library(readxl)
+library(ggpubr)
 library(Rcpp)
 library(coda)
 library(DT)
 library(COMPASS)
 library(tidyverse)
 
-CRU<-"Immunology Center"
-PIname<-"Palmer"
-Protocol <- "Pro00086822"
-
-#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-# Read in antibody data
-#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-# pathtofile<-"//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro00086822"
-# 
-# TheFile<-"Data/Original/20220531_LungTxpProject_DataSummary_mjh.xlsx"
-# 
-# ZeExcelsheets<-excel_sheets(file.path(pathtofile,
-#                                       TheFile))
-# 
-# antiBDList<-lapply(ZeExcelsheets,function(x) read_excel(file.path(pathtofile,
-#                                                                TheFile),
-#                                                      sheet=x))
-# 
-# names(antiBDList)<-ZeExcelsheets
 
 # the RDATA file provided by Lynn containing original paper's COMPASS object
 load(file="~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144-2023-02-09.rda")
@@ -112,22 +94,7 @@ meta <- rv144$data$meta %>%
 #########################################################
 # Filter out patients missing Luminex here: none
 #########################################################
-# meta <- meta_unfiltered %>%
-#   filter(!is.na(Luminex))
-# 
-# nS <- nS_unfiltered %>% as.data.frame() %>%
-#   rownames_to_column(var="PTID") %>%
-# # remove patients with missing covariates
-#   right_join(meta %>% select(PTID), by = "PTID") %>%
-#   `rownames<-`(.$PTID) %>%
-#   select(-PTID)
-#   
-# nU <- nU_unfiltered %>% as.data.frame() %>%
-#   rownames_to_column(var="PTID") %>%
-# # remove patients with missing covariates
-#   right_join(meta %>% select(PTID), by = "PTID") %>%
-#   `rownames<-`(.$PTID) %>%
-#   select(-PTID)
+
 
 # aggregate nS and nU into one flow matrix
 flow_agg <- nU %>% mutate(Stimulation="noStim") %>%
@@ -138,18 +105,12 @@ flow_agg <- nU %>% mutate(Stimulation="noStim") %>%
 
 
 #--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-# All flow/demographic data pre-processing from readIn.R
+# Will get from package later
 #--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-#source("~/CTOT/cmv_palmer_pro00102592/readInDataDCC.R")
-source("~/CHSI/compass-covariate/R/COMPASS-covariate.R")
-#source("~/CHSI/PackageDev/COMPASScovariate/R/COMPASS-discrete.R")
-source("~/CHSI/compass-covariate/R/updatebeta.R")
-source("~/CHSI/compass-covariate/R/utils.R")
+source("~/CHSI/PackageDev/COMPASScovariate/R/COMPASS-covariate.R")
+source("~/CHSI/PackageDev/COMPASScovariate/R/updatebeta.R")
+source("~/CHSI/PackageDev/COMPASScovariate/R/utils.R")
 
-# source("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/Programs/git_pro00102592/0-Code/readInData.R")
-# source("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/COMPASS-covar/compass-covariate/R/COMPASS-covariate.R")
-# source("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/COMPASS-covar/compass-covariate/R/updatebeta.R")
-# source("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/COMPASS-covar/compass-covariate/R/utils.R")
 ```
 
 # Introduction
@@ -250,12 +211,13 @@ cutGates <- function(flowDF, includedIDs=flowDF$PTID, negGate) {
 #---------------------------------------------------------------
 # FUNCTION for getting difference in flow frequency of cut gates
 # stim-noStim
+# TODO: fix to use reframe instead 3/21
 #---------------------------------------------------------------
 flow_freqDiffs <- function(flowDF_cut) {
   # calculate freq of cut gates
   flowDF_freqs <- flowDF_cut %>%
     mutate(sumCounts = rowSums(across(contains("&")))) %>%
-  # proportion across all gates (because COMPASS includes the CD4 vs.CD8 gates)
+  # proportion across all gates 
     mutate(across(contains("&"), ~ .x/sumCounts)) %>%
     select(-c(sumCounts)) 
   
@@ -290,7 +252,7 @@ corPlot <- cor(flowDF_freqDiffs %>%
   pivot_longer(cols = -rowname, 
                names_to = "Antibody Measure",
                values_to = "Correlation") %>%
-  rename(Gate=rowname) %>%
+  dplyr::rename(Gate=rowname) %>%
   simpGates() %>%
   ggplot(aes(x=`Antibody Measure`, y=Gate, fill = `Correlation`)) +
   geom_tile() + theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1)) +
@@ -366,7 +328,7 @@ antibodyDF_transf %>%
   pivot_longer(cols = -c(PTID, infect), names_to = "Vars", values_to = "values") %>%
   drop_na() %>%
   mutate(event=as.factor(infect)) %>%
-  rename(Infection=event) %>%
+  dplyr::rename(Infection=event) %>%
   ggplot(aes(x= Infection, y = values, color = Infection)) + 
   geom_violin() + facet_wrap(.~Vars, scales = "free") +
   xlab("Infection")
@@ -411,15 +373,15 @@ COMPASS_orig <- function(flowDF_cut, metaDF, postfix) {
                                    meta=metaDF,
                                    individual_id = "PTID",
                                    iterations = 200000,
-                                   replications = 1)
+                                   replications = 7)
   endtime= Sys.time()
 
 saveRDS(list(COMPASScovarobj = COMPASScovarobj, runTime = endtime-starttime),
-          paste0("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASSorig200000_seed100_",postfix,".rds"))
+          paste0("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASSorig200000_seed100_new",postfix,".rds"))
 
   
 # saveRDS(list(pp65COMPASSAim2_diffs = COMPASScovarAim2_diffs, runTime = endtime-starttime),
-#           paste0("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/COMPASS-covar/data/pp65Aim2diffsCOMPASS200000_seed100_",postfix,".rds"))
+#           paste0("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/COMPASS-covar/data/pp65Aim2diffsCOMPASS200000_seed100_new",postfix,".rds"))
 rm(COMPASScovarobj)
 
 }
@@ -458,11 +420,11 @@ COMPASS_covar <- function(flowDF_cut, X, postfix) {
   starttime = Sys.time()
   COMPASScovarobj <- .COMPASS.covariate(n_s=n_s, n_u=n_u,
                                          categories = categories,
-                                         iterations = 200000, replications = 1, X = X)
+                                         iterations = 200000, replications = 7, X = X)
   endtime= Sys.time()
 
 saveRDS(list(COMPASScovarobj = COMPASScovarobj, runTime = endtime-starttime),
-          paste0("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASScovar200000_seed100_",postfix,".rds"))
+          paste0("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASScovar200000_seed100_new",postfix,".rds"))
 
   
 # saveRDS(list(pp65COMPASSAim2_diffs = COMPASScovarAim2_diffs, runTime = endtime-starttime),
@@ -477,7 +439,7 @@ rm(COMPASScovarobj)
 #--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
 # FUNCTION for beta table of median/95% confidence intervals
 #--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-betaTable <- function(COMPASScovarobj, flowDF_cut, antibodyDat, percburn=0.5) {
+betaTable <- function(COMPASScovarobj, flowDF_cut, antibodyDat, percburn=0) {
   
 
 nSamp <- nrow(COMPASScovarobj$alpha_s)
@@ -529,7 +491,8 @@ CIDF %>%
                values_to = "Effect") %>%
   mutate(Antibody = relevel(factor(Antibody), ref = "Intercept")) %>%
   ggplot(aes(x=Antibody, y=Gate, fill = Effect)) +
-  geom_tile() + theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1)) +
+  geom_tile() + 
+  theme_classic() +
   scale_fill_gradient2(low = "purple", mid= "white",high = "red") +
   ggtitle("Associated Antibody Effects on Flow Gate Reactivity")
   
@@ -670,11 +633,62 @@ betaTrace <- function(compasscovarBeta, X, gateNames, percburn=0.5, thin=10) {
   levels(betaSamps$rowname) <- gateNames
   
   betaSamps %>%
-    rename(Gate=rowname) %>%
+    dplyr::rename(Gate=rowname) %>%
     simpGates() %>%
     ggplot(aes(x=iter, y=value))  +
     geom_line() +
     facet_grid(rows = vars(Gate), cols = vars(variable) ) +
+    theme(axis.text.x=element_blank(), axis.ticks.x = element_blank(),
+          strip.text.y.right = element_text(angle = 0))
+}
+
+
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# Get desired samples, leaving out the first 50% as burn-in
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+getGammaLong <- function(compasscovarGamma, ns, percburn, thin=10) {
+  #--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+  # Row-binding beta samples for all K gates
+  #--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+  N <- dim(compasscovarGamma)[3]
+  P <- dim(compasscovarGamma)[2]
+  K <- dim(compasscovarGamma)[1]
+  
+  trimmedList<-compasscovarGamma[,,seq(1, N, by=thin)] 
+  finaltrimmedList <- trimmedList[,,seq(percburn*dim(trimmedList)[3]+1,dim(trimmedList)[3])]
+  tempParamlist = vector("list", length = dim(finaltrimmedList)[3])
+  
+  for (n in 1:dim(finaltrimmedList)[3]) {
+    gateParamk <- finaltrimmedList[,,n] %>% 
+      `colnames<-`(colnames(ns)) %>%
+      as.data.frame() %>%
+      rownames_to_column(var="PTID") %>%
+      pivot_longer(-PTID, names_to = "Gate") %>% 
+      mutate(iter = n)
+    
+    tempParamlist[[n]] <- gateParamk
+  }
+  
+  paramSamps <- do.call(rbind,tempParamlist)
+  
+  return(paramSamps)
+}
+
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# Plot gamma trace plots: we plot all patients in same plot for each gate
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+
+gammaTrace <- function(compasscovarGamma, ns, percburn=0.5, thin=10) {
+  
+  gammaSamps <- getGammaLong(compasscovarGamma, ns, percburn, thin) %>%
+    mutate(across(where(is.character), ~as.factor(.x)))
+  
+  
+  gammaSamps %>%
+    simpGates() %>%
+    ggplot(aes(x=iter, y=value))  +
+    geom_line() +
+    facet_grid(rows = vars(Gate) ) +
     theme(axis.text.x=element_blank(), axis.ticks.x = element_blank(),
           strip.text.y.right = element_text(angle = 0))
 }
@@ -721,9 +735,21 @@ n_s <- flow_agg %>% filter(Stimulation=="Stim") %>%
 set.seed(100)
 #COMPASS_orig(flow_agg, meta,"cut")
 
-COMPASSorig<- readRDS("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASSorig200000_seed100_cut.rds")$COMPASScovarobj$fit
+COMPASSorig<- readRDS("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASSorig200000_seed100_newcut.rds")$COMPASScovarobj$fit
 
-RV144COMPASSorig <- rv144$fit
+
+# mean gamma original
+mean_gamma_OG <- COMPASSorig$mean_gamma %>%
+  as.data.frame() %>%
+  rownames_to_column(var="PTID") %>%
+  pivot_longer(-PTID, names_to = "Gate", values_to = "mean_gam") %>%
+  mutate(Gate = map_chr(str_extract_all(Gate, "\\!|&\\!|&")
+                          , ~ str_c(.x,collapse = "")) %>%
+             str_replace_all("\\!|(&\\!)","-") %>% str_replace_all("&","\\+")) %>%
+  # missing + for first cytokine if it is positive
+    mutate(Gate = ifelse(nchar(Gate)==5, paste0("+", Gate), Gate))
+
+#RV144COMPASSorig <- rv144$fit
 
 #compareGammaBoxplot(COMPASSorig, COMPASScovarV2Lum, meta)
 ```
@@ -772,8 +798,23 @@ n_s <- flow_agg %>% filter(Stimulation=="Stim") %>%
 set.seed(100)
 #COMPASS_covar(flow_agg, X, "Lum")
 
-COMPASScovarV2Lum<- readRDS("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASScovar200000_seed100_Lum.rds")$COMPASScovarobj
+COMPASScovarV2Lum<- readRDS("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASScovar200000_seed100_newLum.rds")$COMPASScovarobj
 
+beta_sum <- 0
+betaSamps <- COMPASScovarV2Lum$beta
+for(ii in 1:dim(betaSamps)[3]) {
+  beta_sum = beta_sum + betaSamps[,,ii]
+}
+
+# mean beta
+mean_beta = (beta_sum/dim(betaSamps)[3]) %>%
+  as.data.frame() %>%
+  cbind(Gate=colnames(COMPASScovarV2Lum$mean_gamma)[1:nrow(.)]) %>%
+  mutate(Gate = map_chr(str_extract_all(Gate, "\\!|&\\!|&")
+                          , ~ str_c(.x,collapse = "")) %>%
+             str_replace_all("\\!|(&\\!)","-") %>% str_replace_all("&","\\+")) %>%
+  # missing + for first cytokine if it is positive
+    mutate(Gate = ifelse(nchar(Gate)==5, paste0("+", Gate), Gate))
 
 compareGammaBoxplot(COMPASSorig, COMPASScovarV2Lum, meta)
 ```
@@ -834,9 +875,12 @@ changingPats <- compareGammaDF(COMPASSorig, COMPASScovarV2Lum, meta) %>%
               values_from = MeanGamma) %>%
   mutate(OGlessThreshold = Original < 0.5,
          CovarlessThreshold = Covar < 0.5,
-         Flag = (OGlessThreshold & !CovarlessThreshold) |
-           (!OGlessThreshold & CovarlessThreshold)) %>%
-  filter(Flag) %>% ungroup() %>%
+         Flag = #(OGlessThreshold & !CovarlessThreshold) |
+           #(!OGlessThreshold & CovarlessThreshold) |
+           case_when(Original-Covar>0.25 ~ "Decrease",
+                     Covar-Original>0.25 ~ "Increase",
+                     TRUE ~ "None")) %>%
+  filter(Flag!="None") %>% ungroup() %>%
   distinct()
 
 #quantiles of differences
@@ -851,14 +895,41 @@ diffquants <- flow_freqDiffs(flow_agg) %>%
          quantDiff = percent_rank(values)) %>%
 # join with flagged pats
   left_join(changingPats %>% select(PTID, Gate,Flag)) %>%
-  replace_na(list(Flag=FALSE)) %>%
+  replace_na(list(Flag="None")) %>%
 # join with Luminex
   left_join(antibodyDF_transf) 
 
+
 # plot quantile diffs vs. Luminex, colored by flagged
 diffquants %>%
+  #mutate(Flag=ifelse(Flag,  "True", "False")) %>%
+  # join with covariate coefficients for labels
+  left_join(mean_gamma_OG) %>%
+  ggplot(aes(x=quantDiff, y=Luminex, color=mean_gam))+
+  geom_point(alpha=0.4) + facet_wrap(.~Gate) +
+  labs(x="Quantile of Difference in Subset %", y= "Standardized Luminex",
+       color="Original Mean Gamma") +
+  ggtitle("Original Mean Gamma", subtitle = "by Subset % Difference (quanticized) and Luminex")
+
+ggsave("./Regression/Plots/quantDiffsvLumMG.png", width = 10, height = 9)
+
+# plot quantile diffs vs. Luminex, colored by flagged
+diffquants %>%
+  #mutate(Flag=ifelse(Flag,  "True", "False")) %>%
+  # join with covariate coefficients for labels
+  left_join(mean_beta) %>%
+  # label with min and max diff in prop
+  group_by(Gate) %>%
+  mutate(Range=max(values)-min(values)) %>% ungroup() %>%
+  mutate(lab=paste0(Gate, ", ", round(V2,1), ": ", round(Range,5))) %>%
   ggplot(aes(x=quantDiff, y=Luminex, color=Flag))+
-  geom_point() + facet_wrap(.~Gate, scales="free")
+  geom_point(alpha=0.4) + facet_wrap(.~lab,
+                                     ncol = 4) +
+  labs(x="Quantile of Difference in Subset %", y= "Standardized Luminex",
+       color="Significant Change") +
+  ggtitle("Flagged Cell Subsets", subtitle = "by Subset % Difference (quanticized) and Luminex")
+
+ggsave("./Regression/Plots/quantDiffsvLum.png", width = 25, height = 10)
 
 changingPats %>% 
   select(-c(OGlessThreshold, CovarlessThreshold, Flag)) %>%
@@ -889,8 +960,8 @@ changingFlow <-flow_freqDiffs(flow_agg) %>%
   simpGates() %>%
   right_join(changingPats%>% 
               select(PTID, Gate, CovarlessThreshold, Flag)) %>%
-  rename(`Lower Covariate Mean Gamma` = CovarlessThreshold) %>%
-  filter(Flag) %>%
+  dplyr::rename(`Lower Covariate Mean Gamma` = CovarlessThreshold) %>%
+  filter(Flag!="None") %>%
   # join with number of gates that change per patient
   left_join(changingPats %>% count(PTID)) 
 
@@ -915,32 +986,17 @@ flow_freqDiffs(flow_agg) %>%
 changingAbd <- antibodyDF_transf %>%
   pivot_longer(cols = -c(PTID), names_to = "Vars", values_to = "values") %>%
   left_join(changingPats %>% select(PTID, CovarlessThreshold, Flag)) %>%
-  rename(`Lower Covariate Mean Gamma` = CovarlessThreshold) %>%
-  filter(Flag) %>%
+  dplyr::rename(`Lower Covariate Mean Gamma` = CovarlessThreshold) %>%
+  filter(Flag!="None") %>%
 # join with number of gates that change per patient
   left_join(changingPats %>% count(PTID)) 
 
-# demark changed-patient antibodies over histogram of antibody values
-antibodyDF_transf %>%
-  pivot_longer(cols = -c(PTID), names_to = "Vars", values_to = "values") %>%
-  drop_na() %>%
-  left_join(changingPats %>% select(PTID, Flag)) %>%
-  # join with number of gates that change per patient
-  left_join(changingPats %>% count(PTID)) %>%
-  ggplot(aes(x= values)) + 
-  geom_histogram() + geom_vline(data=changingAbd, aes(xintercept=values,color=n)) + 
-  facet_grid(rows=vars(Vars), scales = "free") +
-  ggtitle("Changed Patients: Antibody Measures") +
-  xlab("Value") +
-  theme(legend.position="bottom",
-        legend.spacing.x = unit(0, 'cm'))+
-  guides(color = guide_legend(label.position = "bottom"))
-
-ggsave("changedABD_CD4.png", width = 8, height = 9)
 
 ```
 
 In all, `r changingPats %>% count(PTID) %>% nrow()` patients had at least one gate for which gamma changed significantly.
+
+### Convergence
 
 The acceptance rate for gamma for COMPASS is plotted on the below x-axis and the acceptance rate for gamma for COMPASS-covariate is plotted on the below y-axis.
 
@@ -953,6 +1009,27 @@ cbind(x=COMPASSorig$A_gamma, y=COMPASScovarV2Lum$A_gamma) %>%
   xlab("Original COMPASS Acceptance Rate") +
   ylab("COMPASS-covar Acceptance Rate") +
   ggtitle("Gamma Acceptance Rates")
+```
+
+We compare how much the gamma MCMC's converge. 
+
+```{r gamma-mcmcs, fig.width=10}
+ggarrange(gammaTrace(COMPASScovarV2Lum$gamma, n_s, thin=1000),
+          gammaTrace(COMPASSorig$gamma, n_s, thin=1000))
+```
+
+We plot the gamma traceplots for the two gates with the most change in q-value (-+---- and -+-+--).
+
+```{r twoGamTrace, options}
+twoGatesMaxQChange <- which(colnames(n_s)%in%
+                              c("!TNFa&IFNg&!IL4&!IL2&!CD154&!IL17a",
+                                "!TNFa&IFNg&!IL4&IL2&!CD154&!IL17a"))
+
+ggarrange(gammaTrace(COMPASScovarV2Lum$gamma[,twoGatesMaxQChange,],
+                     n_s[,twoGatesMaxQChange], thin=100),
+          gammaTrace(COMPASSorig$gamma[,twoGatesMaxQChange,],
+                     n_s[,twoGatesMaxQChange], thin=100))
+
 ```
 
 A traceplot of beta is below with a thin of 10 and the first 50% of samples excluded.
@@ -980,6 +1057,7 @@ Note that in the effect plot, we include intercepts. These intercepts represent 
 ```{r beta-CD4_notsparse, options}
 corrPlot(flow_agg,antibodyDF_transf)
 beta_heatmap(COMPASScovarV2Lum, flow_agg %>% select(-PTID), X)
+ggsave("./Regression/Plots/coefs.png")
 ```
 
 To see whether any of these are meaningful, we can look at confidence intervals for the beta coefficients.
@@ -1179,19 +1257,19 @@ FSscatterplot(FSRV144_DF)
 We save the COMPASS and COMPASS-covar objects in an Rdata file, after appending their PFS and FS scores to their metadata.
 
 ```{r rdat, options}
-datOrig <- list(n_s=n_s, n_u=n_u, meta = meta %>% 
-              inner_join(FSRV144_DF %>% select(PTID, FSRV144)) %>%
-              inner_join(RV144PFS_DF %>% select(PTID, PFSRV144)))
-
-RV144COMPASSOrig = list(fit=COMPASSorig, data=datOrig)
-
-datCovar <- list(n_s=n_s, n_u=n_u, meta = meta %>% 
-              inner_join(FSRV144_DF %>% select(PTID, FSRV144covar)) %>%
-              inner_join(RV144PFS_DF %>% select(PTID, PFSRV144covar)))
-
-RV144COMPASSCovar = list(fit=COMPASScovarV2Lum, data=datCovar)
-
-save(RV144COMPASSOrig, RV144COMPASSCovar, file="RV144COMPASS.RData")
+# datOrig <- list(n_s=n_s, n_u=n_u, meta = meta %>%
+#               inner_join(FSRV144_DF %>% select(PTID, FSRV144)) %>%
+#               inner_join(RV144PFS_DF %>% select(PTID, PFSRV144)))
+# 
+# RV144COMPASSOrig = list(fit=COMPASSorig, data=datOrig)
+# 
+# datCovar <- list(n_s=n_s, n_u=n_u, meta = meta %>%
+#               inner_join(FSRV144_DF %>% select(PTID, FSRV144covar)) %>%
+#               inner_join(RV144PFS_DF %>% select(PTID, PFSRV144covar)))
+# 
+# RV144COMPASSCovar = list(fit=COMPASScovarV2Lum, data=datCovar)
+# 
+# save(RV144COMPASSOrig, RV144COMPASSCovar, file="RV144COMPASS.RData")
 ```
 
 # Session Info
