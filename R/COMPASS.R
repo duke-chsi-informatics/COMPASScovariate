@@ -213,9 +213,16 @@ COMPASS <- function(data, treatment, control, subset=NULL,
     y_s <- .get_data(data, treatment, "treatment")
     y_u <- .get_data(data, control, "control")
 
-    ## make sure the names match up
+    ## TODO: saving names to relabel after removing NaNs
     ys_names <- names(y_s)
     yu_names <- names(y_u)
+
+    # TODO: there are NaNs in the data which are showing up here
+    # unlist(lapply(1:196, function(i) any(is.na(unlist(y_s[i])))))
+    y_s <- lapply(1:length(y_s), function(i) na.omit(y_s[[i]]))
+    y_u <- lapply(1:length(y_u), function(i) na.omit(y_u[[i]]))
+    names(y_s) <- ys_names
+    names(y_u) <- yu_names
 
     diff <- setdiff(
         union(ys_names, yu_names),
@@ -291,14 +298,21 @@ COMPASS <- function(data, treatment, control, subset=NULL,
             return(tmp)
         })))
 
+        # ## generate nice names for the combos
+        # names(combos) <- unname(sapply(combos, function(x) {
+        #     n <- length(x)
+        #     paste0( sep='', collapse='&',
+        #            swap(x, c(-n:-1, 1:n), c( rep("!", n), rep("", n) ) ),
+        #            colnames(categories)[-ncol(categories)]
+        #            )
+        # }))
         ## generate nice names for the combos
-        names(combos) <- unname(sapply(combos, function(x) {
-            n <- length(x)
-            paste0( sep='', collapse='&',
-                   swap(x, c(-n:-1, 1:n), c( rep("!", n), rep("", n) ) ),
-                   colnames(categories)[-ncol(categories)]
-                   )
-        }))
+        # TODO: removed swap function, which was probably a C function??
+        names(combos) <- unname(sapply(names(combos), function(x)
+          gsub("-1", "!&",
+               gsub("^1", "&",
+                    paste0(collapse="",sign(combos[[x]]), colnames(categories[,-ncol(categories)]))))
+        ))
 
         m <- .Call(C_COMPASS_CellCounts, y, combos)
 
