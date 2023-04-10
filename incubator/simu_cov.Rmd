@@ -131,7 +131,7 @@ alpha_u[1, 1:(K - 1)] = 10 #initializaion
   
 **Toy example for normalization**
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 gamma = c(0, 1, 1, 0,
           1, 0, 1, 0
 )
@@ -149,6 +149,14 @@ p_s[2:3] = rdirichlet(n = 1, alpha = alpha.s[2:3]) * sum(p_u[gamma == 1])
 
 sum(p_s)
 ```
+
+**Notes from meeting on 3/28/23**
+
+- Add shift of concentration parameter depending on number of subsets that are stimulated for subject -- goal is to have weight for a single stimulated subset be the same as the weight of each of the subsets when many are stimulated in order to avoid giving too much weight to subsets when only a few are stimulated for a sample. Cliburn suggested thinking about it in terms of a counterfactual when the same subject has the covariate or does not have the covariate -- the weight given in the no covariate case to each subset shouldn't be a lot larger. 
+- Examine traceplots for convergence -- does covariate help convergence for clusters where not many are responding
+- Color mean gamma - mean gamma plots by true gamma value
+- Reduce subjects to 40
+- Add logistic regression with mean_gamma as covariates (first K-1 subsets) instead of using PFS
 
 ## Simulate Data and Run COMPASScovariate
 
