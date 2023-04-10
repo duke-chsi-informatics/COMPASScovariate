@@ -254,13 +254,23 @@ conc.adjust <- function(ng, k, alpha, p) {
 ```{r}
 #Get number of threads from SLURM scheduler as # of CPUs allocated
 # threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
-threads = 2
+threads = 4
 
 #Make a single df of all combinations of parameters
-sim.pars <- expand.grid(I = c(50),#, 60, 100, 200),   #Number of subjects
-                        K = c(16),        #Number of unique cell subsets
-                        p = c(0)         #Number of covariations IN ADDITION TO AGE | HIV status
-            )
+sim.pars <- 
+  expand.grid(I = c(50),#, 60, 100, 200),   #Number of subjects
+              K = c(16),        #Number of unique cell subsets
+              p = c(0),         #Number of covariates IN ADDITION TO AGE | HIV status
+              prob.hiv.pos = c(0.1, 0.5),    #Proportion with binary indicator == 1
+              beta.unif.min = c(6, 3),         #Lower bound on beta1 distribution
+              beta.unif.max = c(8, 4)          #Upper bound on beta1 distribution
+              
+  ) %>%
+  
+  #Remove unwanted combinations
+  filter(beta.unif.min <= beta.unif.max &
+         beta.unif.max - beta.unif.min <= 2
+  )
 
 #Repeat the df to create replicates for each combination -- repeat 'sim.rep' times
 sim.pars <- do.call('rbind', lapply(1:sim.rep, FUN = function(simrep) {
@@ -286,6 +296,9 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   I <- sim.pars[s,]$I ## sample size i.e., #subjects; I = 30
   K <- sim.pars[s,]$K ## number of cell categories: K = 16
   p <- sim.pars[s,]$p + 1 # number of covariates # larger p
+  prob.hiv.pos <- sim.pars[s,]$prob.hiv.pos
+  beta.unif.min <- sim.pars[s,]$beta.unif.min
+  beta.unif.max <- sim.pars[s,]$beta.unif.max
   sim_rep <- sim.pars[s,]$sim_rep
   K1 = K-1 ## number of cell categories minus one (last one is baseline)
   
