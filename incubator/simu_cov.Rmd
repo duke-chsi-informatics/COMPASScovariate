@@ -1517,22 +1517,29 @@ log.reg.PFS <-
           bind_rows(
             logreg.compass.cov$coefficients %>%
               data.frame() %>%
-              tibble::rownames_to_column(var = "Model") %>%
-              filter(Model == "compass.cov.pfs") %>%
-              mutate(Model = replace(Model, Model == "compass.cov.pfs", "COMPASScov")) %>%
-              select(Model, Estimate, Pr...z..),
+              tibble::rownames_to_column(var = "Coef") %>%
+              # filter(Model == "compass.cov.pfs") %>%
+              mutate(Model = "COMPASScov",
+                     Coef = replace(Coef, Coef == "compass.cov.pfs", "Cytokine"),
+              ) %>%
+              select(Coef, Model, Estimate, Pr...z..) %>%
+              relocate(Model, .before = Coef),
             logreg.compass$coefficients %>%
               data.frame() %>%
-              tibble::rownames_to_column(var = "Model") %>%
-              filter(Model == "compass.pfs") %>%
-              mutate(Model = replace(Model, Model == "compass.pfs", "COMPASS")) %>%
-              select(Model, Estimate, Pr...z..)
+              tibble::rownames_to_column(var = "Coef") %>%
+              # filter(Model == "compass.cov.pfs") %>%
+              mutate(Model = "COMPASS",
+                     Coef = replace(Coef, Coef == "compass.pfs", "Cytokine"),
+              ) %>%
+              select(Coef, Model, Estimate, Pr...z..) %>%
+              relocate(Model, .before = Coef)
           ) %>%
           mutate(I = fit$I,
                  K = fit$K,
                  p = fit$p,
                  rep = fit$sim_rep
-          )
+          ) %>%
+          arrange(Coef)
         
         return(logreg.output)
     })
@@ -1544,8 +1551,21 @@ Display results
 log.reg.PFS %>%
   group_by(I, K, p, rep) %>%
   summarize(Model = Model,
+            Coef = Coef,
             Estimate = Estimate,
             Pvalue = Pr...z..
   )
 ```
 
+Logistic regression of true protection against true PFS
+```{r}
+lapply(sim.out.list, FUN = function(sim) {
+  (
+    coef(
+      glm(protect.true ~ pfs.true.pfs,
+          family = "binomial",
+          data = sim$sim.fit$data$meta
+        )
+    )
+  )
+})
