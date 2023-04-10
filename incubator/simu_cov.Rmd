@@ -185,7 +185,7 @@ set.seed(111)
 # rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
 # sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter combination
 
-iter = 5000 #Number of COMPASScovariate iterations per replicate
+iter = 10000 #Number of COMPASScovariate iterations per replicate
 rep = 2     #Number of COMPASScovariate replicates
 sim.rep = 1
 
@@ -198,19 +198,22 @@ e.subset.sd = 5   #SD of number of events per subject that are not in the Kth ca
 #Betas
 beta.mu = 0
 beta.sigma = 0.8
-beta.unif.min = 2
-beta.unif.max = 3
-int.mu = 0
+beta.unif.min = 6
+beta.unif.max = 8
+int.mu = -3
 int.sd = 0.1
 beta.selection.cutoff = 0.2
 
 #HIV+ and HIV- subjects
-prob.hiv.pos = 0.5
+prob.hiv.pos = 0.1
 age.mean.hiv.neg = 0.5
 age.mean.hiv.pos = -0.5
 age.sd = 0.8
 
 ### Pu and Ps
+a.u = 50
+a.s = 200
+
 #Concentration params drawn from lognormal
 pu.logmu = log(20)
 p.logsd = 0.03
@@ -231,6 +234,19 @@ dir.create(out.dir,
            showWarnings = FALSE,
            recursive = TRUE
 )
+
+#Function to adjust concentration parameters depending on the number of responding cell subsets
+conc.adjust <- function(ng, k, alpha, p) {
+  #Calculate prop of subsets responding (gamma = 1)
+  prop = ng/k
+  if(prop < p) {
+    #If the proportion is less than p, then reduce the concentration parameter as a linear function of that proportion within the range of ng < p
+    return(alpha * prop/p)
+  } else {
+    #Otherwise return alpha unchanged
+    return(alpha)
+  }
+}
 ```
 
 ### Generate combinations of simulation parameters
@@ -241,7 +257,7 @@ dir.create(out.dir,
 threads = 2
 
 #Make a single df of all combinations of parameters
-sim.pars <- expand.grid(I = c(200),#, 60, 100, 200),   #Number of subjects
+sim.pars <- expand.grid(I = c(50),#, 60, 100, 200),   #Number of subjects
                         K = c(16),        #Number of unique cell subsets
                         p = c(0)         #Number of covariations IN ADDITION TO AGE | HIV status
             )
@@ -262,33 +278,40 @@ sim.pars <- do.call('rbind', lapply(1:sim.rep, FUN = function(simrep) {
 cl <- makeCluster(threads)
 registerDoParallel(cl)
 
-sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", "tidyr")) %dopar% {
+sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", "tidyr", "MCMCpack")) %dopar% {
 
+  ##################
+  # Fixed Parameters
+  ##################
   I <- sim.pars[s,]$I ## sample size i.e., #subjects; I = 30
   K <- sim.pars[s,]$K ## number of cell categories: K = 16
   p <- sim.pars[s,]$p + 1 # number of covariates # larger p
   sim_rep <- sim.pars[s,]$sim_rep
   K1 = K-1 ## number of cell categories minus one (last one is baseline)
   
+  #########################
   ### True Regression Coefs
+  #########################
   #Intercepts
   int.true = rnorm(n = K1,
                    mean = int.mu,
                    sd = int.sd
-                   )
+  )
   
   #Covariate betas
   # beta.true = matrix(rnorm(n = K1*(p),
-  #                          mean = beta.mu, 
-  #                          sd = beta.sigma), 
+  #                          mean = beta.mu,
+  #                          sd = beta.sigma),
   #                    nrow = K1
   # )
   beta.true = matrix(runif(n = K1*(p),
                            min = beta.unif.min,
                            max = beta.unif.max
-                     ),
-                     nrow = K1
+  ),
+  nrow = K1
   )
+  #Convert all but 2 betas to 0
+  beta.true[sample(1:length(beta.true),size = K1 - 6)] = 0
   
   #Variable selection -- if |true beta| < 0.5, then true beta = 0
   beta.true.selection = apply(beta.true, MARGIN = c(1,2), FUN = function(x) ifelse(abs(x) < beta.selection.cutoff, 0, x))
@@ -296,41 +319,43 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   #Bind intercept betas to other betas
   beta.true.final <- cbind(int.true, beta.true.selection)
   
+  ##################
   ###Make covariates
+  ##################
   #Add int and HIV status
   covar <- data.frame(
-                  #First column is 1s for intercept
-                  int = rep(1, I*1),
-                  #HIV status
-                  hiv = sample(c(0, 1), size = I, replace = T, prob = c(prob.hiv.pos, 1-prob.hiv.pos)),
-                  #Age
-                  age = rep(NA, I)
+    #First column is 1s for intercept
+    int = rep(1, I*1),
+    #HIV status
+    hiv = sample(c(1, 0), size = I, replace = T, prob = c(prob.hiv.pos, 1-prob.hiv.pos)),
+    #Age
+    age = rep(NA, I)
   )
   
   #Add remainder of covariates if any
   if (p > 1) {
     covar <- cbind(covar,
                    matrix(rnorm(n = I),
-                         ncol = p-1,
-                         nrow = I,
-                         dimnames = list(NULL, paste0("V", 2:(p)))
-                  )
+                          ncol = p-1,
+                          nrow = I,
+                          dimnames = list(NULL, paste0("V", 2:(p)))
+                   )
     )
   }
   
   #Add age | HIV
   covar <- covar %>%
-            mutate(age = replace(age, hiv == 0, rnorm(n = sum(hiv == 0), 
-                                                     mean = age.mean.hiv.neg, 
-                                                     sd = age.sd
-                                                     )
-                                 ),
-                   age = replace(age, hiv == 1, rnorm(n = sum(hiv == 1),
-                                                     mean = age.mean.hiv.pos,
-                                                     sd = age.sd
-                                                     )
-                                 )
-            )
+    mutate(age = replace(age, hiv == 0, rnorm(n = sum(hiv == 0),
+                                              mean = age.mean.hiv.neg,
+                                              sd = age.sd
+    )
+    ),
+    age = replace(age, hiv == 1, rnorm(n = sum(hiv == 1),
+                                       mean = age.mean.hiv.pos,
+                                       sd = age.sd
+    )
+    )
+    )
   #Plot age | HIV
   # covar %>%
   #   ggplot(aes(x = age,
@@ -341,10 +366,13 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   
   #Matrix matrix version without HIV status
   X = covar %>%
-        dplyr::select(-age) %>%
-        as.matrix()
+    dplyr::select(-age) %>%
+    as.matrix()
   
+  #####################
   ### True Gamma Matrix
+  #####################
+  
   #Generate omega_ik -- probability that gamma_ik = 1
   
   #  1. p covariates from subject i x betas for p coefficients for cluster k gives linear predictor for cluster k in subject i
@@ -354,167 +382,144 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   omega <- matrix(NA,
                   nrow = I,
                   ncol = K1
-                  )
+  )
   
   #Empty matrix to hold gamma
   gamma.m <- matrix(NA,
-                       nrow = I,
-                       ncol = K1
-                       )
+                    nrow = I,
+                    ncol = K1
+  )
   
   for (i in 1:I) {
     for (k in 1:K1) {
       #Generate linear predictor and prob via inverse link
       omega[i,k] <- binomial()$linkinv(X[i, ] %*% beta.true.final[k,]) #p covariates from ith subject x betas for p coefficients for kth cluster gives linear predictor
-      
+  
       #Generate gamma as Bernoulli RV with probs from omega
       gamma.m[i,k] <- rbinom(n = 1,
                              size = 1,
                              prob = omega[i,k]
-                             )
+      )
     }
   }
   
   
-  ### True Counts
+  
+  
+  ######################
+  ### Counts
+  ######################
+  
+  ### Empty counts matrices
   #Empty matrices for stim and unstim counts. **Note:** Create K columns with 0s, not K - 1
   n_u <- matrix(0,
                 nrow = I,
-                ncol = K)
+                ncol = K
+  )
   
   n_s <- matrix(0,
                 nrow = I,
-                ncol = K)
+                ncol = K
+  )
   
-  #### Unstimulated
-  ##Generate unstimulated count values for each subject
-  #Generate total counts
+  ### Total counts
+  ## Unstim
   Nu = ceiling(
-        rnorm(mean = e.total.mu, 
-              sd = e.total.sd,
-              n = I)
+    rnorm(mean = e.total.mu,
+          sd = e.total.sd,
+          n = I)
   )
-  
-  Nu.subset = ceiling(
-                rnorm(mean = e.subset.mu, 
-                      sd = e.subset.sd,
-                      n = I
-                ) 
-  )
-  
-  ##Loop over each sample and do two things:
-  
-  #  1. Create a vector of length K - 1 (not K) of concentration parameters drawn from a lognormal distribution with an unstimulated-specific log-mean.
-  #  2. Using the vector of concentration parameters, draw a vector of counts of length K - 1 (not K) from a Dirichlet-Multinomial distribution and fill the first K - 1 columns of the ith row of n_u
-  
-  #Notes:
-  
-  # - Leave the last column as 0 for all negative cell subset
-  # - Use Nu instead of Nu.subset because now Kth category included in DM-generated data
-  # - For the Kth subset, draw from lognormal with ps.logmu * 3 so that concentration values are MUCH higher for this subset, giving a very large number of counts. This is important to allow stimulated subsets to have higher counts without lowering the counts of unstimulated subsets because they are zero sum -- the probability of "taking" those counts from the null subset is much higher if it has significantly higher counts than the rest.
-  
-  concentration_u = matrix(NA,
-                           nrow = I,
-                           ncol = K
-                    )
-  
-  for (i in 1:I) {
-    concentration_u[i,1:K1] = rlnorm(n = K1, 
-                   meanlog = (pu.logmu), 
-                   sdlog = p.logsd
-    )
-    
-    concentration_u[i,K] = rlnorm(n = 1,
-                                  meanlog = pu.logmu*3,
-                                  sdlog = p.logsd
-    )
-    #HMP version
-    n_u[i,1:K] = t(matrix(HMP::Dirichlet.multinomial(Nrs = Nu[i], shape = concentration_u[i,])))
-    
-    # #MultiRNG version
-    # n_u[i,1:K] = MultiRNG::draw.dirichlet.multinomial(N = Nu[i],                    #Total counts
-    #                                                        no.row = 1,                      #Sample size
-    #                                                        d = length(concentration_u[i,]), #Number of categories (same as length of concentration vector)
-    #                                                        alpha = concentration_u[i,],     #Concentration vector
-    #                                                        beta = 1                         #Common shape parameter
-    #                                                             )
-  }
-  
-  #### Stimulated
-  ##Generate stimulated count values for each subject
-  #Generate total counts
+  ## Stim
   Ns = ceiling(
-        rnorm(mean = e.total.mu, 
-              sd = e.total.sd,
-              n = I)
+    rnorm(mean = e.total.mu,
+          sd = e.total.sd,
+          n = I)
   )
   
-  Ns.subset = ceiling(
-                rnorm(mean = e.subset.mu, 
-                      sd = e.subset.sd,
-                      n = I
-                ) 
+  
+  #############################
+  ### Generate Counts
+  #############################
+  
+  #########
+  ### Probs
+  #Empty matrices for probs
+  p_u = matrix(NA,
+               nrow = I,
+               ncol = K
+  )
+  p_s = p_u
+  
+  #################
+  ### Concentration
+  
+  # Fixed concentration vector for unstim and stim for all samples
+  # Unstim: K-1 subsets have value a.u, Kth subset has value 10 x a.u to generate large counts
+  # Stim: K-1 subsets have value a.s, Kth subset has value 10 x a.s to generate large counts (but not used in practice)
+  
+  #Unstim
+  alpha_u = matrix(c(rep(a.u, K1), a.u*10),
+                   nrow = I,
+                   ncol = K,
+                   byrow = TRUE
   )
   
-  ##Loop over each sample and do two things:
+  #Stim
+  alpha_s = matrix(c(rep(a.s, K1), a.u*10),
+                   nrow = I,
+                   ncol = K,
+                   byrow = TRUE
+  )
   
-  #  1. Create a vector of length K - 1 (not K) of concentration parameters drawn from a lognormal distribution with an unstimulated-specific log-mean.
-  #  2. Using the vector of concentration parameters, draw a vector of counts of length K - 1 (not K) from a Dirichlet-Multinomial distribution and fill the first K - 1 columns of the ith row of n_u
   
-  #Notes:
+  #############################
+  ### Generate Probs and Counts
   
-  #  - Leave the last column as 0
-  #  - Concentration is shifted by amount which is a linear function of age if gamma = 1. Add some random noise to relationship between age and amount of concentration shifted.
-  #  - Use Nu instead of Nu.subset because now Kth category included in DM-generated data
-  #  - For the Kth subset, draw from lognormal with ps.logmu * 3 so that concentration values are MUCH higher for this subset, giving a very large number of counts. This is important to allow stimulated subsets to have higher counts without lowering the counts of unstimulated subsets because they are zero sum -- the probability of "taking" those counts from the null subset is much higher if it has significantly higher counts than the rest.
+  # For each sample:
+  #   Create an unstim prob vector of length K drawn from Dirichelet using the unstim concentration vector
+  #   Create a stim prob vector of length K by copying the unstim
+  #   For subsets where gamma == 1 (and for the Kth subset), draw new probs from Dirichlet using stim concentration vector, then normalize by the total prob in the unstim vector of these entires
+  #     IMPORTANT:  Include the Kth subset in new Dirichlet and normalization so that the increased prob of response among k-1 subsets can be "taken" from the Kth subset
   
-  concentration_s = matrix(NA,
-                           nrow = I,
-                           ncol = K
-                    )
-  
-  #Loop over i rows and j columns in concentration_s matrix
   for (i in 1:I) {
-    for (j in 1:K1) {
-      concentration_s[i, j] = 
-              #Draw the concentration value for the current cell (n=1) from lognormal
-              rlnorm(n = 1, 
-                     #Mean of lognormal is pu.logmu
-                     meanlog = (pu.logmu + 
-                                #If the corresponding gamma.m cell is 1, then subset is stimulated
-                                ifelse(gamma.m[i,j] == 1,
-                                       #If stimulated, add a diff value to mean of lognormal that is a linear function of age
-                                       X[i, ] %*% ps.logmu.diff.beta +
-                                         #Add small amount of noise to relationship between age and diff value
-                                         rnorm(mean = 0,
-                                               sd = ps.logmu.diff.sd,
-                                               n = 1
-                                         ),
-                                       #Else if not stimulated, add 0
-                                       0
-                                )
-                     ),
-                     sdlog = p.logsd
-      )
-    } #End loop over j columns
-    
-    #Draw concentration for null subset (Kth column) from lognormal with mean pu.logmu * constant
-    concentration_s[i, K] = rlnorm(n = 1,
-                                  meanlog = pu.logmu*3,
-                                  sdlog = p.logsd
-    )
-    #HMP version
-    n_s[i,1:K] = t(matrix(HMP::Dirichlet.multinomial(Nrs = Ns[i], shape = concentration_s[i,])))
-    
-    # #MultiRNG version
-    # n_s[i,1:K] = MultiRNG::draw.dirichlet.multinomial(N = Ns[i],                #Total counts
-    #                                                    no.row = 1,                      #Sample size
-    #                                                    d = length(concentration_s[i,]), #Number of categories (same as length of concentration vector)
-    #                                                    alpha = concentration_s[i,],     #Concentration vector
-    #                                                    beta = 1                         #Common shape parameter
-    #                                                             )
+    # Draw prob vector from Dirichlet for unstim
+    p_u[i,] <- rdirichlet(n = 1, alpha = alpha_u[i,])
   
-  } #End loop over i rows
+    # Copy prob vector for unstim and assign to stim
+    p_s[i,] <- p_u[i,]
+  
+    # For subsets where gamma == 1, draw new probabilities from Dirichlet using stim concentrations, and normalize (see note above)
+    p_s[i, c(which(gamma.m[i,] == 1), K)] <- 
+      #Draw new probability vector for just subsets where gamma = 1
+      rdirichlet(n = 1,
+                 #Concentration vector is alpha_s for subsets where gamma = 1 and for Kth subset
+                 alpha = c(#Adjust the alpha_s for subsets where gamma = 1
+                           conc.adjust(ng = sum(gamma.m[i,] == 1),
+                                       k = K,
+                                       p = 0.25,
+                                       alpha = alpha_s[i, which(gamma.m[i,] == 1)]
+                          ),
+                          #Alpha for Kth subsets (not adjusted)
+                          alpha_s[i, K]
+                 )
+                 
+          #Normalize the new probability vector by the total probabilty for subsets where gamma = 1 and the kth subset
+          #This ensures new p_s is still a valid probability vector
+      ) * sum(p_u[i, c(which(gamma.m[i,] == 1), K)])
+  
+    # Draw counts for untim from Multinomial using unstim prob vector
+    n_u[i,] <- rmultinom(n = 1,
+                         size = Nu[i],
+                         prob = p_u[i,]
+    )
+  
+    # Draw counts for stim from Multinomial using stim prob vector
+    n_s[i,] <- rmultinom(n = 1,
+                         size = Ns[i],
+                         prob = p_s[i,]
+    )
+  }
+
   
   ## Add colnames
   colnames(n_s) = 1:K
