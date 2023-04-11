@@ -1241,54 +1241,88 @@ lapply(sim.out.list, FUN = function(sim) {
 
 
 ```{r}
-lapply(sim.out.list, FUN = function(sim) {
-
-  #Omega - mean_gamma
-  true.gamma.diff.covar <- sim$gamma.m - sim$sim.fit$fit$mean_gamma[,1:sim$K1]
-  true.gamma.diff.compass <- sim$gamma.m - sim$compass.fit$fit$fit$mean_gamma[,1:sim$K1]
-  colnames(true.gamma.diff.compass) <- NULL
+do.call('rbind',
+  lapply(sim.out.list, FUN = function(sim) {
   
-  #Create datasets
-  true.gamma.diff.covar.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
-                                          true.gamma.diff.covar
-  )
-  true.gamma.diff.compass.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
-                                            true.gamma.diff.compass
-  )
-
-  bind_rows(
-    true.gamma.diff.covar.df %>%
-      select(-hiv) %>%
-      summarize(Under.est = sum(rowSums(.) > 0),
-                Over.est = sum(rowSums(.) < 0)
+    #Omega - mean_gamma
+    true.gamma.diff.covar <- sim$gamma.m - sim$sim.fit$fit$mean_gamma[,1:sim$K1]
+    true.gamma.diff.compass <- sim$gamma.m - sim$compass.fit$fit$fit$mean_gamma[,1:sim$K1]
+    colnames(true.gamma.diff.compass) <- NULL
+    
+    #Create datasets
+    true.gamma.diff.covar.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
+                                            true.gamma.diff.covar
+    )
+    true.gamma.diff.compass.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
+                                              true.gamma.diff.compass
+    )
+  
+  #Calculate percentage correct, over-, and under-estimated gammas
+  gamma.correct <- 
+    bind_rows(
+      true.gamma.diff.covar.df %>%
+        select(-hiv) %>%
+        summarize(
+          Per.correct = sum(apply(., MARGIN = 2, FUN = function(x) {
+                             sum(x == 0)
+                             }
+                       )
+          ) / (dim(.)[1] * dim(.)[2]) * 100,
+          Per.under = sum(apply(., MARGIN = 2, FUN = function(x) {
+                             sum(x < 0)
+                             }
+                       )
+          ) / (dim(.)[1] * dim(.)[2]) * 100,
+          Per.over = sum(apply(., MARGIN = 2, FUN = function(x) {
+                             sum(x > 0)
+                             }
+                       )
+          ) / (dim(.)[1] * dim(.)[2]) * 100
+        ) %>%
+        mutate(Model = "COMPASScov"),
+      true.gamma.diff.compass.df %>%
+        select(-hiv) %>%
+        summarize(
+          Per.correct = sum(apply(., MARGIN = 2, FUN = function(x) {
+                             sum(x == 0)
+                             }
+                       )
+          ) / (dim(.)[1] * dim(.)[2]) * 100,
+          Per.under = sum(apply(., MARGIN = 2, FUN = function(x) {
+                             sum(x < 0)
+                             }
+                       )
+          ) / (dim(.)[1] * dim(.)[2]) * 100,
+          Per.over = sum(apply(., MARGIN = 2, FUN = function(x) {
+                             sum(x > 0)
+                             }
+                       )
+          ) / (dim(.)[1] * dim(.)[2]) * 100
+        ) %>%
+        mutate(Model = "COMPASS")
+    )
+    
+    #Extract just percent correct gamma and display
+    gamma.correct %>%
+      select(-Per.under, -Per.over) %>%
+      pivot_wider(names_from = Model,
+                  values_from = Per.correct,
+                  id_cols = NULL
       ) %>%
-      mutate(Model = "COMPASScov"),
-    true.gamma.diff.compass.df %>%
-      select(-hiv) %>%
-      summarize(Under.est = sum(rowSums(.) > 0),
-                Over.est = sum(rowSums(.) < 0)
+      mutate(N.subjects = sim$I,
+             N.subsets = sim$K,
+             Prob.covar = sim$prob.hiv.pos,
+             Beta.unif.min = sim$beta.unif.min,
+             Beta.unif.max = sim$beta.unif.max
       ) %>%
-      mutate(Model = "COMPASS")
-  )
-  
-
-  
-})
+      relocate(COMPASScov, .after = Beta.unif.max) %>%
+      relocate(COMPASS, .after = COMPASScov)
+    
+  })
+)
 ```
 
-```{r}
-round(
-      sum(sim$gamma.m == sim$sim.fit$fit$mean_gamma[,-ncol(sim$sim.fit$fit$mean_gamma)]) /
-        (dim(sim$gamma.m)[1] * dim(sim$gamma.m)[2]) * 100,
-      digits = 2
-  )
 
-  round(
-      sum(sim$gamma.m == sim$compass.fit$fit$fit$mean_gamma[,-ncol(sim$compass.fit$fit$fit$mean_gamma)]) /
-        (dim(sim$gamma.m)[1] * dim(sim$gamma.m)[2]) * 100,
-      digits = 2
-  )
-```
 
 
 #### Gammma from COMPASScovariate vs COMPASS
@@ -1311,24 +1345,51 @@ lapply(sim.out.list, FUN = function(sim) {
   #Subset columns where there are any differences
   mean.gamma.diff <- mean.gamma.diff[, abs(colSums(mean.gamma.diff)) > 0]
   
+  true.gamma <- as.data.frame(sim$gamma.m)
+  
   #Rename columns
   colnames(mean.gamma.diff.df) <- gsub("^X", "cluster", colnames(mean.gamma.diff.df))
+  colnames(true.gamma) <- gsub("^V", "cluster", colnames(true.gamma))
+  
+  mean.gamma.diff.df %>%
+    mutate(obs = row.names(.)) %>%
+    pivot_longer(values_to = "Diff",
+                 cols = starts_with("cluster")
+    ) %>%
+
+    inner_join(.,
+               true.gamma %>%
+                 mutate(obs = row.names(.)) %>%
+                 pivot_longer(values_to = "True",
+                              cols = starts_with("cluster")
+                 ),
+               by = c("obs", "name")
+    ) %>%
+    filter(Diff != 0)
   
   #Histograms
   plot.list <-
-    lapply(grep('cluster', colnames(mean.gamma.diff.df), value = T), FUN = function(cluster) {
+    lapply(grep('cluster', colnames(mean.gamma.diff.df)[-ncol(mean.gamma.diff.df)], value = T), FUN = function(cluster) {
+      
+      temp <-
+        mean.gamma.diff.df %>%
+          select(c(hiv,
+                   {{cluster}}
+                )
+          ) %>%
+          rename(est = {{cluster}}) %>%
+          mutate(true = as.factor(true.gamma[, colnames(true.gamma) == {{cluster}}])
+          )
     
       plot <-
-        ggplot(data = mean.gamma.diff.df %>%
-                        select(c(hiv,
-                                 {{cluster}}
-                        )
-                 ),
-                 aes_string(x = cluster,
-                            y = "hiv"
-                 )
+        ggplot(data = temp,
+               aes_string(x = "est",
+                          y = "hiv",
+                          color = "true"
+               )
         )+
-        tidybayes::stat_halfeye()+
+        # tidybayes::stat_halfeye()+
+        geom_point()+
         geom_jitter(width = 0,
                     height = 0.1
         )+
@@ -1339,6 +1400,8 @@ lapply(sim.out.list, FUN = function(sim) {
       
       return(plot)
     })
+  
+  do.call("grid.arrange", c(plot.list, ncol=4))
 })
 ```
 
