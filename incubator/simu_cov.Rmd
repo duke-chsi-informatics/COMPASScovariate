@@ -158,6 +158,21 @@ sum(p_s)
 - Reduce subjects to 40
 - Add logistic regression with mean_gamma as covariates (first K-1 subsets) instead of using PFS
 
+**Notes from meeting on 4/4/23:**
+
+- Added tentative shift of concentration parameter, Lynn said it looks fine
+- Try combinations of:
+  + Reducing prevalence of binary covariate == 1 in sample
+  + Reducing probability of response to stimulation when covariate == 1 (signal)
+  + Doing both above
+- Methods for comparing models
+  + True gamma vs mean_gamma for each model
+    + Percent correct
+    + Percent over/under
+  + Mean_gamma COMPASS vs mean_gamma COMPASScov
+  + Convergence of samplers
+  
+
 ## Simulate Data and Run COMPASScovariate
 
 **Approach**
