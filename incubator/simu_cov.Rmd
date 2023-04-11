@@ -21,7 +21,7 @@ source("~/project_repos/COMPASScovariate/R/COMPASS-covariate.R")
 source("~/project_repos/COMPASScovariate/R/updatebeta.R")
 source("~/project_repos/COMPASScovariate/R/utils.R")
 
-library(foreach); library(doParallel); library(HMP); library(MCMCpack); library(devtools); library(ggplot2); library(tidyverse)
+library(foreach); library(doParallel); library(HMP); library(MCMCpack); library(devtools); library(ggplot2); library(tidyverse); library(grid)
 
 # install.packages("MultiRNG")
 ```
@@ -774,7 +774,7 @@ sim.out.list[[1]]$sim.fit$data$n_s[1:5,]
 ```
 
 
-```{r fig.width = 4, fig.height = 3}
+```{r fig.width = 15, fig.height = 12}
 lapply(sim.out.list, FUN = function(sim) {
   #Find the differences in proportions between stim and unstim
   diff <- (sim$sim.fit$data$n_s / rowSums(sim$sim.fit$data$n_s)) - (sim$sim.fit$data$n_u / rowSums(sim$sim.fit$data$n_u))
@@ -820,7 +820,11 @@ lapply(sim.out.list, FUN = function(sim) {
         labs(title = stringr::str_to_title({{cluster}}))
     })
   
-  return(plot.out.list)
+  gridExtra::grid.arrange(grobs = plot.out.list,
+                          ncol = 4
+  )
+  
+  # return(plot.out.list)
 })
 ```
 
@@ -828,7 +832,7 @@ lapply(sim.out.list, FUN = function(sim) {
 
 #### True PFS vs True Protection
 
-```{r}
+```{r fig.width=6, fig.height=10}
 lapply(sim.out.list, FUN = function(sim) {
   #Linear predictor vs PFS
   plot1 <-
@@ -867,7 +871,11 @@ lapply(sim.out.list, FUN = function(sim) {
   geom_point()+
   tidybayes::stat_halfeye()
   
-  return(list(plot1, plot2, plot3))
+  # return(list(plot1, plot2, plot3))
+  
+  gridExtra::grid.arrange(grobs = list(plot1, plot2, plot3),
+                          ncol = 1
+  )
 })
 
 ```
@@ -879,7 +887,7 @@ lapply(sim.out.list, FUN = function(sim) {
 
 #### Mean Gamma vs Omega
 
-```{r fig.width=6, fig.height=4}
+```{r fig.width=15, fig.height=12}
 lapply(sim.out.list, FUN = function(sim) {
 
   #Omega - mean_gamma
@@ -939,13 +947,15 @@ lapply(sim.out.list, FUN = function(sim) {
       return(hist.plot)
     })
   
-  return(hist.plot.list)
-  
+  # return(hist.plot.list)
+  gridExtra::grid.arrange(grobs = hist.plot.list,
+                          ncol = 4
+  )
 })
 ```
 
 Look at COMPASScovariate Omega - mean.gamma
-```{r}
+```{r eval=FALSE, include=FALSE}
 lapply(sim.out.list, FUN = function(sim) {
 
   #Omega - mean_gamma
@@ -967,7 +977,7 @@ lapply(sim.out.list, FUN = function(sim) {
 ```
 
 Look at COMPASS omega - mean.gamma
-```{r}
+```{r eval=FALSE, include=FALSE}
 lapply(sim.out.list, FUN = function(sim) {
 
   #Omega - mean_gamma
@@ -991,7 +1001,7 @@ lapply(sim.out.list, FUN = function(sim) {
 
 #### Mean Gamma vs True Gamma
 
-```{r}
+```{r fig.width=15, fig.height=12}
 lapply(sim.out.list, FUN = function(sim) {
 
   #Omega - mean_gamma
@@ -1051,12 +1061,15 @@ lapply(sim.out.list, FUN = function(sim) {
       return(hist.plot)
     })
   
-  return(hist.plot.list)
+  # return(hist.plot.list)
+  gridExtra::grid.arrange(grobs = hist.plot.list,
+                          ncol = 4
+  )
   
 })
 ```
 
-
+Percent gamma correct
 ```{r}
 do.call('rbind',
   lapply(sim.out.list, FUN = function(sim) {
@@ -1126,7 +1139,8 @@ do.call('rbind',
                   values_from = Per.correct,
                   id_cols = NULL
       ) %>%
-      mutate(N.subjects = sim$I,
+      mutate(Rep = sim$sim_rep,
+             N.subjects = sim$I,
              N.subsets = sim$K,
              Prob.covar = sim$prob.hiv.pos,
              Beta.unif.min = sim$beta.unif.min,
@@ -1146,7 +1160,7 @@ do.call('rbind',
 
 Add: Color by true gamma value
 
-```{r}
+```{r fig.width=15, fig.height=12}
 lapply(sim.out.list, FUN = function(sim) {
   #Find the differences in mean gamma matrices between COMPASS and COMPASScovariate
   mean.gamma.diff <- sim$sim.fit$fit$mean_gamma - sim$compass.fit$fit$fit$mean_gamma
@@ -1206,7 +1220,9 @@ lapply(sim.out.list, FUN = function(sim) {
                )
         )+
         # tidybayes::stat_halfeye()+
-        geom_point()+
+        geom_point(size = 0.6,
+                   alpha = 0.3
+        )+
         geom_jitter(width = 0,
                     height = 0.1
         )+
@@ -1218,7 +1234,9 @@ lapply(sim.out.list, FUN = function(sim) {
       return(plot)
     })
   
-  do.call("grid.arrange", c(plot.list, ncol=4))
+  gridExtra::grid.arrange(grobs = plot.list,
+                          ncol = 4
+  )
 })
 ```
 
@@ -1227,27 +1245,45 @@ lapply(sim.out.list, FUN = function(sim) {
 Is the precision of the estimates lower for COMPASS without a covariate?
 
 ```{r}
-#Loop over columns
-apply(
-  #Find differences in variance between COMPASS - COMPASScov for all I x K
-  apply(sim.out.list[[1]]$compass.fit$fit$fit$gamma, MARGIN = c(1,2), var) - 
-    apply(sim.out.list[[1]]$sim.fit$fit$gamma, MARGIN = c(1,2), var),
-  MARGIN = 2,
-  FUN = function(x) {
-    
-    #Make a dataframe of the Kth subset var diffs
-    dat = data.frame(
-      diff.precision = x
-    )
-    
-    #Plot a histogram of the var diffs
-    ggplot(data = dat,
-           aes(x = diff.precision)
-    )+
-    geom_histogram()
-  }
+do.call('rbind', 
+  lapply(sim.out.list, FUN = function(sim) {
+    #Combine columns
+    do.call('rbind',
+      #Loop over columns
+      apply(
+        #Find differences in variance between COMPASS - COMPASScov for all I x K
+        apply(sim$compass.fit$fit$fit$gamma, MARGIN = c(1,2), var) - 
+          apply(sim$sim.fit$fit$gamma, MARGIN = c(1,2), var),
+        MARGIN = 2,
+        FUN = function(x) {
+          
+          #Make a dataframe of the sum of the diff in variance for all subsets
+          dat = data.frame(
+            diff.precision = sum(x)
+          )
+          
+          # #Plot a histogram of the var diffs
+          # ggplot(data = dat,
+          #        aes(x = diff.precision)
+          # )+
+          # geom_histogram()
+          
+          return(dat)
+        }
+      )
+    ) %>%
+      #Find the sum of all columns
+      sum() %>%
+      data.frame(
+        sim.rep = sim$sim_rep,
+        N.subjects = sim$I,
+        Prob.covar = sim$prob.hiv.pos,
+        Beta.unif.min = sim$beta.unif.min,
+        Beta.unif.max = sim$beta.unif.max,
+        total.diff.var = .
+      )
+  })
 )
-  
 ```
 
 
@@ -1260,14 +1296,14 @@ Does COMPASScovariate pick up the signal from the age covariate via mean gamma?
 ## Compare Estimates to True
 
 Create a custom function for calculating the mode
-```{r}
+```{r eval=FALSE, include=FALSE}
 getmode <- function(v) {
    uniqv <- unique(v)
    uniqv[which.max(tabulate(match(v, uniqv)))]
 }
 ```
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 fits.out <- 
 lapply(sim.out.list, FUN = function(sim) {
   #Give shortcut names to objects from sim.out.list
@@ -1636,13 +1672,13 @@ lapply(sim.out.list, FUN = function(sim) {
 
 ## Summarize
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 sim.stats <- do.call('rbind', fits.out)
 
 sim.stats
 ```
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 sim.stats %>%
   dplyr::group_by(I, K, p) %>%
   dplyr::summarize(
@@ -1668,7 +1704,7 @@ sim.stats %>%
 
 ### Plots
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 lapply(sim.out.list, FUN = function(sim) {
   #Extract covariates from  metadata
   temp <- sim$sim.fit$data$meta
@@ -1706,7 +1742,7 @@ lapply(sim.out.list, FUN = function(sim) {
 })
 ```
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 sim.out.list[[1]]$sim.fit$data$meta
 
 lapply(sim.out.list, FUN = function(sim) {
@@ -1744,7 +1780,7 @@ lapply(sim.out.list, FUN = function(sim) {
 })
 ```
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 lapply(sim.out.list, FUN = function(sim) {
   #Extract covariates from  metadata
   temp <- sim$sim.fit$data$meta
@@ -1784,7 +1820,7 @@ lapply(sim.out.list, FUN = function(sim) {
 
 ### Logistic Regression
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 log.reg.PFS <- 
   do.call('rbind',
     lapply(sim.out.list, FUN = function(fit) {
@@ -1834,7 +1870,7 @@ log.reg.PFS <-
 ```
 
 Display results
-```{r}
+```{r eval=FALSE, include=FALSE}
 log.reg.PFS %>%
   group_by(I, K, p, rep) %>%
   summarize(Model = Model,
@@ -1845,7 +1881,7 @@ log.reg.PFS %>%
 ```
 
 Logistic regression of true protection against true PFS
-```{r}
+```{r eval=FALSE, include=FALSE}
 lapply(sim.out.list, FUN = function(sim) {
   (
     coef(
