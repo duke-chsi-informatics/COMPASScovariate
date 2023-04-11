@@ -703,7 +703,10 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
                        K,
                        K1,
                        p,
-                       sim_rep
+                       sim_rep,
+                       prob.hiv.pos,
+                       beta.unif.min,
+                       beta.unif.max
   )
   
   names(results.list) <- c('sim.fit',
@@ -716,7 +719,11 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
                            'K',
                            'K1',
                            'p',
-                           'sim_rep')
+                           'sim_rep',
+                           'prob.hiv.pos',
+                           'beta.unif.min',
+                           'beta.unif.max'
+                          )
   
   return(results.list)
 }
