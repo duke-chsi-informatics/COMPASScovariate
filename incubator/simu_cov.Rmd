@@ -7,6 +7,7 @@ output:
     code_folding: show
     toc: true
     toc_float: true
+    toc_depth: 6
     df_print: paged
 ---
 
@@ -820,9 +821,16 @@ lapply(sim.out.list, FUN = function(sim) {
         labs(title = stringr::str_to_title({{cluster}}))
     })
   
-  gridExtra::grid.arrange(grobs = plot.out.list,
-                          ncol = 4
+  # gridExtra::grid.arrange(grobs = plot.out.list,
+  #                         ncol = 4
+  # )
+  
+  gr <- gridExtra::marrangeGrob(grobs = plot.out.list,
+                                ncol = 4,
+                                nrow = 4
   )
+  
+  gr
   
   # return(plot.out.list)
 })
@@ -830,9 +838,9 @@ lapply(sim.out.list, FUN = function(sim) {
 
 
 
-#### True PFS vs True Protection
+<!-- #### True PFS vs True Protection -->
 
-```{r fig.width=6, fig.height=10}
+```{r eval=FALSE, fig.height=10, fig.width=6, include=FALSE}
 lapply(sim.out.list, FUN = function(sim) {
   #Linear predictor vs PFS
   plot1 <-
@@ -873,21 +881,21 @@ lapply(sim.out.list, FUN = function(sim) {
   
   # return(list(plot1, plot2, plot3))
   
-  gridExtra::grid.arrange(grobs = list(plot1, plot2, plot3),
-                          ncol = 1
+  gr <- gridExtra::marrangeGrob(grobs = hist.plot.list,
+                                ncol = 2,
+                                nrow = 8
   )
+  
+  gr
 })
 
 ```
 
 
 
+### Mean Gamma vs Omega
 
-### Estimated Values
-
-#### Mean Gamma vs Omega
-
-```{r fig.width=15, fig.height=12}
+```{r fig.width=8, fig.height=20}
 lapply(sim.out.list, FUN = function(sim) {
 
   #Omega - mean_gamma
@@ -948,9 +956,12 @@ lapply(sim.out.list, FUN = function(sim) {
     })
   
   # return(hist.plot.list)
-  gridExtra::grid.arrange(grobs = hist.plot.list,
-                          ncol = 4
+  gr <- gridExtra::marrangeGrob(grobs = hist.plot.list,
+                                ncol = 2,
+                                nrow = 8
   )
+  
+  gr
 })
 ```
 
@@ -999,9 +1010,9 @@ lapply(sim.out.list, FUN = function(sim) {
 })
 ```
 
-#### Mean Gamma vs True Gamma
+### Mean Gamma vs True Gamma
 
-```{r fig.width=15, fig.height=12}
+```{r fig.width=8, fig.height=20}
 lapply(sim.out.list, FUN = function(sim) {
 
   #Omega - mean_gamma
@@ -1062,9 +1073,16 @@ lapply(sim.out.list, FUN = function(sim) {
     })
   
   # return(hist.plot.list)
-  gridExtra::grid.arrange(grobs = hist.plot.list,
-                          ncol = 4
+  # gridExtra::grid.arrange(grobs = hist.plot.list,
+  #                         ncol = 2
+  # )
+  
+  gr <- gridExtra::marrangeGrob(grobs = hist.plot.list,
+                          ncol = 2,
+                          nrow = 8
   )
+  
+  gr
   
 })
 ```
@@ -1156,11 +1174,11 @@ do.call('rbind',
 
 
 
-#### Gammma from COMPASScovariate vs COMPASS
+### Gamma from COMPASScovariate vs COMPASS
 
 Add: Color by true gamma value
 
-```{r fig.width=15, fig.height=12}
+```{r fig.width=8, fig.height=20}
 lapply(sim.out.list, FUN = function(sim) {
   #Find the differences in mean gamma matrices between COMPASS and COMPASScovariate
   mean.gamma.diff <- sim$sim.fit$fit$mean_gamma - sim$compass.fit$fit$fit$mean_gamma
@@ -1234,9 +1252,12 @@ lapply(sim.out.list, FUN = function(sim) {
       return(plot)
     })
   
-  gridExtra::grid.arrange(grobs = plot.list,
-                          ncol = 4
+  gr <- gridExtra::marrangeGrob(grobs = plot.list,
+                          ncol = 2,
+                          nrow = 8
   )
+  
+  gr
 })
 ```
 
@@ -1672,7 +1693,7 @@ lapply(sim.out.list, FUN = function(sim) {
 
 ## Summarize
 
-```{r eval=FALSE, include=FALSE}
+```{r}
 sim.stats <- do.call('rbind', fits.out)
 
 sim.stats
