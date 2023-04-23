@@ -285,6 +285,9 @@ qValsDF %>%
   ylab("Covariate Q-value") +
   ggtitle("Q-values for Covar vs. Original Outcomes")
 
+#########################################################
+# All changes in q-values
+#########################################################
 qValsDF %>%
   pivot_wider(names_from = type, values_from = qval) %>%
   mutate(diffs=(original-covar)) %>%
@@ -299,6 +302,35 @@ qValsDF %>%
   theme_classic()
 
 ggsave("./Regression/Plots/qvalDiffs.png", height = 6, width = 15)
+
+qValsDFSig <- covarQvals %>%
+  rename(outcomeCoef=outcome) %>%
+  dplyr::mutate(type="covar") %>%
+  rbind(origQvals %>%
+          rename(outcomeCoef=outcome) %>%
+              mutate(type="original")) %>%
+  dplyr::mutate(outcomeCoef=as.numeric(outcomeCoef)) %>%
+  group_by(outcomeName) %>%
+  filter(any(outcomeCoef<0.1)) %>%
+  dplyr::mutate(outcomeName=case_when(outcomeName=="PFSRV144covar" ~ "PFSRV144",
+                                      outcomeName == "FSRV144covar" ~ "FSRV144",
+                                      TRUE ~ outcomeName)) %>%
+  dplyr::mutate(across(outcomeCoef:ADCCprim, ~as.numeric(.x))) %>%
+  pivot_longer(-c(outcomeName,type), names_to = "var", values_to = "qval")
+
+qValsDFSig %>%
+  filter(var=="outcomeCoef") %>%
+  mutate(outcomeName=ifelse(str_detect(outcomeName,"PFS"), "PFS", outcomeName),
+         type=ifelse(type=="covar","Covariate", "Original")) %>%
+  rename(`COMPASS Type`=type) %>%
+  ggplot(aes(x=outcomeName,y=qval,fill=`COMPASS Type`)) +
+  geom_col(position = "dodge") +
+  labs(x="COMPASS Regression Variable", y="Q-values",
+       title = "Significant Q-values of Chosen Gate Gammas and PFS",
+       subtitle = "by COMPASS Type")
+
+ggsave("./Regression/Plots/qvalDiffsSig.png", height = 6, width = 8)
+  
 ```
 
 ```{r setup, options}
@@ -413,18 +445,44 @@ bind_rows(roc_dt) %>%
 ##### boxplot for PI, FS, and PFS#####
 ######################################
 
-covarfit$data$meta %>%
+scores_boxplot <- covarfit$data$meta %>%
   left_join(RV144COMPASSOrig$data$meta) %>%
   select(PTID, FSRV144covar, FSRV144, PFSRV144covar, PFSRV144, vaccine) %>%
   pivot_longer(-c(PTID,vaccine), names_to = "ScoreType", values_to = "Score") %>%
 # make column for covar vs. original
-  dplyr::mutate(Type=ifelse(str_detect(ScoreType,"covar"), "Covar", "Orig"),
+  dplyr::mutate(Type=ifelse(str_detect(ScoreType,"covar"), "Covariate", "Original"),
          ScoreType = str_remove_all(ScoreType,"covar")) %>%
+# rename vaccine to be title case
+  mutate(vaccine=str_to_title(vaccine),
+         ScoreType=ifelse(str_detect(ScoreType,"PFS"), "PFS", "FS")) %>%
 # plot faceting by Type
   ggplot(aes(x=vaccine, y=Score)) +
   geom_boxplot() +
   geom_jitter() +
-  facet_wrap(Type~ScoreType) 
+  labs(x="Vaccine Response", y="Score", title="Functional and Polyfunctional Scores") +
+  facet_wrap(ScoreType ~ Type) 
+
+ggsave("./Regression/Plots/scores_boxplot.png", scores_boxplot)
+
+scores_boxplot_by_infection <- covarfit$data$meta %>%
+  left_join(RV144COMPASSOrig$data$meta) %>%
+  select(PTID, FSRV144covar, FSRV144, PFSRV144covar, PFSRV144, flrstatus) %>%
+  drop_na() %>%
+  pivot_longer(-c(PTID,flrstatus), names_to = "ScoreType", values_to = "Score") %>%
+# make column for covar vs. original
+  dplyr::mutate(Type=ifelse(str_detect(ScoreType,"covar"), "Covariate", "Original"),
+         ScoreType = str_remove_all(ScoreType,"covar")) %>%
+# rename flrstatus to be title case
+  mutate(flrstatus=ifelse(flrstatus==1, "Infected", "Uninfected"),
+         ScoreType=ifelse(str_detect(ScoreType,"PFS"), "PFS", "FS")) %>%
+# plot faceting by Type
+  ggplot(aes(x=flrstatus, y=Score)) +
+  geom_boxplot() +
+  geom_jitter() +
+  labs(x="Infection Status", y="Score", title="Functional and Polyfunctional Scores") +
+  facet_wrap(ScoreType ~ Type) 
+
+ggsave("./Regression/Plots/scores_boxplot_byinfection.png", scores_boxplot_by_infection)
 
 # wilcoxon test for original COMPASS
 wilcox.test(metaOrig %>% filter(vaccine=="VACCINE") %>% .$PFSRV144,
