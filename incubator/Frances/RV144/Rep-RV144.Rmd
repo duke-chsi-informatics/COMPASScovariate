@@ -75,6 +75,7 @@ library(readxl)
 library(ggpubr)
 library(Rcpp)
 library(coda)
+library(superheat)
 library(DT)
 library(COMPASS)
 library(tidyverse)
@@ -754,6 +755,20 @@ mean_gamma_OG <- COMPASSorig$mean_gamma %>%
 #compareGammaBoxplot(COMPASSorig, COMPASScovarV2Lum, meta)
 ```
 
+### Reference DFs for gate and patient names
+
+```{r gate-names-df, options}
+gateRefDF <- data.frame(orig_names=colnames(n_s), names_idx = 1:ncol(n_s)) %>%
+   mutate(Gate = map_chr(str_extract_all(orig_names, "\\!|&\\!|&")
+                          , ~ str_c(.x,collapse = "")) %>%
+             str_replace_all("\\!|(&\\!)","-") %>% str_replace_all("&","\\+")) %>%
+  # missing + for first cytokine if it is positive
+    mutate(Gate = ifelse(nchar(Gate)==5, paste0("+", Gate), Gate))
+
+patsRefDF <- data.frame(pat_names=rownames(n_s), 
+                        pat_idx = 1:nrow(n_s))
+```
+
 ### Comparing Mean Gamma (Covariate vs. Original)
 
 The below boxplots compare the mean gamma values estimated by COMPASS-covariate and original COMPASS. The cytokines we gate by are:
@@ -816,6 +831,17 @@ mean_beta = (beta_sum/dim(betaSamps)[3]) %>%
   # missing + for first cytokine if it is positive
     mutate(Gate = ifelse(nchar(Gate)==5, paste0("+", Gate), Gate))
 
+# mean gamma covariate
+mean_gamma_covar <- COMPASScovarV2Lum$mean_gamma %>%
+  as.data.frame() %>%
+  rownames_to_column(var="PTID") %>%
+  pivot_longer(-PTID, names_to = "Gate", values_to = "mean_gam") %>%
+  mutate(Gate = map_chr(str_extract_all(Gate, "\\!|&\\!|&")
+                          , ~ str_c(.x,collapse = "")) %>%
+             str_replace_all("\\!|(&\\!)","-") %>% str_replace_all("&","\\+")) %>%
+  # missing + for first cytokine if it is positive
+    mutate(Gate = ifelse(nchar(Gate)==5, paste0("+", Gate), Gate))
+
 compareGammaBoxplot(COMPASSorig, COMPASScovarV2Lum, meta)
 ```
 
@@ -866,9 +892,6 @@ compareGammaDF <- function(pp65COMPASSAim2, COMPASScovarAim2, metaDF, percBurn=0
 There are quite a few patients who have dramatic changes in mean gamma. The below sorted table of mean gammas, raw Luminex score, and scaled flow differences indicates that these dramatic changes consist of patients consist of people with either Luminex scores or large flow differences.
 
 ```{r mean-gamma-changes, fig.height=12}
-# inverse cdf
-quantInv <- function(distr, value) ecdf(distr)(value)
-
 #patients whose mean gamma changes past the 0.5 threshold for at least one gate
 changingPats <- compareGammaDF(COMPASSorig, COMPASScovarV2Lum, meta) %>%
   pivot_wider(names_from = COMPASStype, 
@@ -899,29 +922,57 @@ diffquants <- flow_freqDiffs(flow_agg) %>%
 # join with Luminex
   left_join(antibodyDF_transf) 
 
+#percentage of people with positive differences in expression prop (ps-pu)
+cutoffZero <- diffquants %>% mutate(zeroVal=values>0) %>% count(Gate,zeroVal) %>%
+  group_by(Gate) %>%
+  mutate(propThreshold=n/sum(n)) %>%
+  filter(zeroVal == TRUE)
 
-# plot quantile diffs vs. Luminex, colored by flagged
+#########################################################
+# plot quantile diffs vs. Luminex, colored by mean gamma diff
+#########################################################
+
 diffquants %>%
-  #mutate(Flag=ifelse(Flag,  "True", "False")) %>%
   # join with covariate coefficients for labels
-  left_join(mean_gamma_OG) %>%
-  ggplot(aes(x=quantDiff, y=Luminex, color=mean_gam))+
-  geom_point(alpha=0.4) + facet_wrap(.~Gate) +
+  left_join(mean_beta) %>%
+  # label with min and max diff in prop
+  group_by(Gate) %>%
+  mutate(maxDiff=max(values),
+         minDiff=min(values)) %>% ungroup() %>%
+  # label with proportion of patients with positive response
+  left_join(cutoffZero) %>%
+  mutate(lab=paste0(Gate, ", effect: ", round(V2,1), ", ", 
+                    "%+: ",round(propThreshold,2),
+                    ", max:", round(maxDiff,5))) %>%
+  # join with diffs of mean gamma
+  left_join(mean_gamma_OG %>% 
+              left_join(mean_gamma_covar, by=c("PTID", "Gate"))) %>%
+  mutate(mean_gam_diff = mean_gam.y-mean_gam.x) %>%
+  ggplot(aes(x=quantDiff, y=Luminex, color=mean_gam_diff))+
+  geom_point(alpha=0.4) + facet_wrap(.~lab, ncol = 4)  +
+  scale_colour_gradient2() +
   labs(x="Quantile of Difference in Subset %", y= "Standardized Luminex",
-       color="Original Mean Gamma") +
-  ggtitle("Original Mean Gamma", subtitle = "by Subset % Difference (quanticized) and Luminex")
+       color="Mean Gamma Diff") +
+  ggtitle("Mean Gamma", subtitle = "by Subset % Difference (quanticized) and Luminex")
 
-ggsave("./Regression/Plots/quantDiffsvLumMG.png", width = 10, height = 9)
+ggsave("./Regression/Plots/quantDiffsvLumMGDiff.png", width = 12, height = 12)
 
+#########################################################
 # plot quantile diffs vs. Luminex, colored by flagged
+#########################################################
 diffquants %>%
   #mutate(Flag=ifelse(Flag,  "True", "False")) %>%
   # join with covariate coefficients for labels
   left_join(mean_beta) %>%
   # label with min and max diff in prop
   group_by(Gate) %>%
-  mutate(Range=max(values)-min(values)) %>% ungroup() %>%
-  mutate(lab=paste0(Gate, ", ", round(V2,1), ": ", round(Range,5))) %>%
+  mutate(maxDiff=max(values),
+         minDiff=min(values)) %>% ungroup() %>%
+  # label with proportion of patients with positive response
+  left_join(cutoffZero) %>%
+  mutate(lab=paste0(Gate, ", effect:", round(V2,1), ", ", 
+                    "%+: ",round(propThreshold,2),
+                    ", range:", round(minDiff,5),"-",round(maxDiff,5))) %>%
   ggplot(aes(x=quantDiff, y=Luminex, color=Flag))+
   geom_point(alpha=0.4) + facet_wrap(.~lab,
                                      ncol = 4) +
@@ -931,66 +982,30 @@ diffquants %>%
 
 ggsave("./Regression/Plots/quantDiffsvLum.png", width = 25, height = 10)
 
-changingPats %>% 
-  select(-c(OGlessThreshold, CovarlessThreshold, Flag)) %>%
-# join with Luminex and standardized differences of flow gates
-  left_join(antibodyDF_transf)  %>%
-  left_join(flow_freqDiffs(flow_agg) %>%
-  ungroup() %>%
-  pivot_longer(cols = -c(PTID), names_to = "Gate", values_to = "values") %>%
-    simpGates() %>%
-  drop_na()) %>%
-# scale differences over all gates
-  # simpGates() %>% mutate(`Standardized Gate Diffs`=scale(values))) %>%
-  #select(-values) %>%
-  arrange(desc(abs(Covar-Original))) %>%
-# find gate diff means/sds
-  group_by(Gate) %>%
-  mutate(GateMean=mean(values),
-         GateSD = sd(values))  %>%
-# find quantile of where value lies on gate diff
-  mutate(valsQuant = percent_rank(values)) %>%
-  datatable(rownames = FALSE, options = list(
-  pageLength = 5, autoWidth = TRUE))
+#########################################################
+# heatmap of mean gamma differences
+#########################################################
+toHM <- mean_gamma_OG %>% 
+              left_join(mean_gamma_covar, by=c("PTID", "Gate")) %>%
+  mutate(mean_gam_diff = mean_gam.y-mean_gam.x) %>%
+  select(PTID,Gate, mean_gam_diff) %>%
+  pivot_wider(names_from = PTID, values_from = mean_gam_diff)
 
-#flow frequency differences of patients who change
-changingFlow <-flow_freqDiffs(flow_agg) %>%
-  ungroup() %>%
-  pivot_longer(cols = -c(PTID), names_to = "Gate", values_to = "values") %>%
-  simpGates() %>%
-  right_join(changingPats%>% 
-              select(PTID, Gate, CovarlessThreshold, Flag)) %>%
-  dplyr::rename(`Lower Covariate Mean Gamma` = CovarlessThreshold) %>%
-  filter(Flag!="None") %>%
-  # join with number of gates that change per patient
-  left_join(changingPats %>% count(PTID)) 
+toHM  %>%
+  dplyr::select(-Gate) %>% as.matrix() %>%
+  `row.names<-`(toHM$Gate) %>%
+  superheat(#row.dendrogram = TRUE,
+            yr=c(mean_beta$V2,NA),
+            left.label.text.size = 2,
+             heat.pal = c("#b35806", "white", "#542788"))
 
-flow_freqDiffs(flow_agg) %>%
-  ungroup() %>%
-  pivot_longer(cols = -c(PTID), names_to = "Gate", values_to = "values") %>%
-  drop_na() %>%
-  simpGates() %>%
-  mutate(lessthan0Diff = values <0) %>%
-  left_join(changingPats %>% select(PTID, Flag)) %>%
-  ggplot(aes(x= values)) + 
-  geom_histogram() + geom_vline(data=changingFlow, aes(xintercept=values, color=n), alpha=0.3) + 
-  facet_wrap(.~Gate,scales="free_x", ncol = 3) +
-  ggtitle("Changed Patients: Differences in Stim-noStim Flow") +
-  xlab("Value") +
-  theme(legend.position="bottom",
-        legend.spacing.x = unit(0, 'cm'))+
-  guides(color = guide_legend(label.position = "bottom"))
-
-
-#antibodies of patients who change
-changingAbd <- antibodyDF_transf %>%
-  pivot_longer(cols = -c(PTID), names_to = "Vars", values_to = "values") %>%
-  left_join(changingPats %>% select(PTID, CovarlessThreshold, Flag)) %>%
-  dplyr::rename(`Lower Covariate Mean Gamma` = CovarlessThreshold) %>%
-  filter(Flag!="None") %>%
-# join with number of gates that change per patient
-  left_join(changingPats %>% count(PTID)) 
-
+toHM  %>%
+  dplyr::select(-Gate) %>% as.matrix() %>%
+  `row.names<-`(toHM$Gate) %>%
+  superheat(row.dendrogram = TRUE,
+            left.label.text.size = 2,
+             heat.pal = c("#b35806", "white", "#542788")) 
+ggsave("./Regression/Plots/hm.png", width = 25, height = 10)
 
 ```
 
@@ -1030,6 +1045,38 @@ ggarrange(gammaTrace(COMPASScovarV2Lum$gamma[,twoGatesMaxQChange,],
           gammaTrace(COMPASSorig$gamma[,twoGatesMaxQChange,],
                      n_s[,twoGatesMaxQChange], thin=100))
 
+```
+
+
+We plot the Geweke's statistic for the two gates' patients' gamma values.
+
+```{r geweke, options}
+patsForGeweke <- mean_gamma_OG %>% 
+              left_join(mean_gamma_covar, by=c("PTID", "Gate")) %>%
+  mutate(mean_gam_diff = mean_gam.y-mean_gam.x) %>%
+  filter(Gate %in% c("-+----","-+-+--")) %>%
+  # join with ref DFs
+  left_join(patsRefDF %>% rename(PTID=pat_names)) %>%
+  left_join(gateRefDF) %>%
+  select(Gate, PTID, contains("idx")) %>%
+  rowwise() %>%
+  # get Geweke
+  mutate(gewekeCovar=geweke.diag(COMPASScovarV2Lum$gamma[pat_idx, names_idx,])$z,
+         gewekeOrig=geweke.diag(COMPASSorig$gamma[pat_idx,names_idx,])$z) 
+
+patsForGeweke %>%
+  rename(Covariate=gewekeCovar, Original=gewekeOrig) %>%
+  pivot_longer(cols = c(Covariate, Original),
+               names_to = "COMPASSType", 
+               values_to= "gewScore") %>%
+  group_by(COMPASSType, Gate) %>%
+  mutate(label=paste0(Gate,", N=",sum(!is.na(gewScore)))) %>%
+  ggplot(aes(x=gewScore)) +
+  facet_wrap(COMPASSType~label) +
+  geom_histogram() +
+  labs(x="Geweke Score", y="Count", title="Geweke Scores for -+----, -+-+-- (N=262)")
+
+ggsave("./Regression/Plots/geweke.png", width = 10, height = 8)
 ```
 
 A traceplot of beta is below with a thin of 10 and the first 50% of samples excluded.
