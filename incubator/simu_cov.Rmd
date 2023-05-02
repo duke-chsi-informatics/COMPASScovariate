@@ -751,7 +751,8 @@ Check acceptance rate for sampler for COMPASS and COMPASScovariate (want 20% - 3
 ```{r}
 lapply(sim.out.list, FUN = function(fit) {
   data.frame(
-    per.covar = fit$prob.hiv.pos,
+    N.subj = fit$I,
+    # per.covar = fit$prob.hiv.pos,
     beta.unif.min = fit$beta.unif.min,
     beta.unif.max = fit$beta.unif.max,
     metric = c("Min", "Q1", "Median", "Mean", "Q3", "Max"),
@@ -760,7 +761,7 @@ lapply(sim.out.list, FUN = function(fit) {
   )
 }) %>%
   do.call('rbind', .) %>%
-  group_by(per.covar, beta.unif.min, beta.unif.max, metric) %>%
+  group_by(N.subj, beta.unif.min, beta.unif.max, metric) %>%
   summarize(Mean.COMPASScov = mean(COMPASScovar),
             Mean.COMPASS = mean(COMPASS)
   ) %>%
@@ -805,7 +806,7 @@ sim.out.list[[1]]$sim.fit$data$n_s[1:5,]
 ```
 
 
-```{r fig.width = 15, fig.height = 12}
+```{r eval=FALSE, fig.height=, fig.width=15, include=FALSE}
 lapply(sim.out.list, FUN = function(sim) {
   #Find the differences in proportions between stim and unstim
   diff <- (sim$sim.fit$data$n_s / rowSums(sim$sim.fit$data$n_s)) - (sim$sim.fit$data$n_u / rowSums(sim$sim.fit$data$n_u))
@@ -981,26 +982,27 @@ do.call('rbind',
       
       #Find proportion reduction in SSE
       bind_rows(summarise(.,
-                      across(where(is.numeric), ~ (1 - (.x[model == "COMPASScovariate"] / .x[model == "COMPASS"])) * 100),
+                      across(where(is.numeric), ~ .x[model == "COMPASScovariate"] / .x[model == "COMPASS"]),
                       across(where(is.character), ~ "COMPASScovariate / COMPASS")
                 )
       ) %>%
       
       relocate(SSE.total, .after = model) %>%
 
-      mutate(per.covar = sim$prob.hiv.pos,
+      mutate(#per.covar = sim$prob.hiv.pos,
+             N.subj = sim$I,
              beta.unif.min = sim$beta.unif.min,
              beta.unif.max = sim$beta.unif.max
       ) %>%
-      relocate(per.covar, .before = SSE.total) %>%
-      relocate(beta.unif.min, .after = per.covar) %>%
+      # relocate(per.covar, .before = SSE.total) %>%
+      relocate(beta.unif.min, .before = SSE.total) %>%
       relocate(beta.unif.max, .after = beta.unif.min)
 
 
     
     })
   ) %>%
-  group_by(per.covar, beta.unif.min, beta.unif.max, model) %>%
+  group_by(N.subj, beta.unif.min, beta.unif.max, model) %>%
   summarize(N.rep = n(),
             mean.SSE.total = mean(SSE.total)
   )
@@ -1141,19 +1143,20 @@ do.call('rbind',
       relocate(Per.wrong, .after = N.wrong) %>%
       relocate(Per.correct, .after = Per.wrong) %>%
       
-      mutate(per.covar = sim$prob.hiv.pos,
+      mutate(#per.covar = sim$prob.hiv.pos,
+             N.subj = sim$I,
              beta.unif.min = sim$beta.unif.min,
              beta.unif.max = sim$beta.unif.max
       ) %>%
-      relocate(per.covar, .before = N.gamma) %>%
-      relocate(beta.unif.min, .after = per.covar) %>%
+      # relocate(per.covar, .before = N.gamma) %>%
+      relocate(beta.unif.min, .before = N.gamma) %>%
       relocate(beta.unif.max, .after = beta.unif.min)
   
   
     
   })
 ) %>%
-  group_by(per.covar, beta.unif.min, beta.unif.max, model) %>%
+  group_by(N.subj, beta.unif.min, beta.unif.max, model) %>%
   summarize(N.rep = n(),
             N.gamma = mean(N.gamma),
             N.wrong = mean(N.wrong),
@@ -1161,6 +1164,8 @@ do.call('rbind',
             Per.correct = mean(Per.correct)
   )
 ```
+
+
 
 #### Figures
 
@@ -1398,17 +1403,18 @@ do.call('rbind',
                 Per.beta.over = sum(over.est) / n() * 100
       ) %>%
       
-      mutate(per.covar = sim$prob.hiv.pos,
+      mutate(#per.covar = sim$prob.hiv.pos,
+             N.subj = sim$I,
              beta.unif.min = sim$beta.unif.min,
              beta.unif.max = sim$beta.unif.max
       ) %>%
-      relocate(per.covar, .before = param) %>%
-      relocate(beta.unif.min, .after = per.covar) %>%
+      # relocate(per.covar, .before = param) %>%
+      relocate(beta.unif.min, .before = param) %>%
       relocate(beta.unif.max, .after = beta.unif.min)
       
   })
 ) %>%
-  group_by(per.covar, beta.unif.min, beta.unif.max, param) %>%
+  group_by(N.subj, beta.unif.min, beta.unif.max, param) %>%
   summarize(N.rep = n(),
             Mean.per.within = mean(Per.beta.within),
             Mean.per.under = mean(Per.beta.under),
