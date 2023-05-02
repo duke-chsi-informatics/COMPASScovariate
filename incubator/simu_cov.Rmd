@@ -343,8 +343,8 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   ),
   nrow = K1
   )
-  #Convert all but 2 betas to 0
-  beta.true[sample(1:length(beta.true),size = K1 - 6)] = 0
+  #Convert all but 6 betas to 0
+  # beta.true[sample(1:length(beta.true),size = K1 - 6)] = 0
   
   #Variable selection -- if |true beta| < 0.5, then true beta = 0
   beta.true.selection = apply(beta.true, MARGIN = c(1,2), FUN = function(x) ifelse(abs(x) < beta.selection.cutoff, 0, x))
