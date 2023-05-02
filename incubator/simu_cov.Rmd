@@ -203,7 +203,7 @@ set.seed(111)
 
 iter = 25000 #Number of COMPASScovariate iterations per replicate
 rep = 2     #Number of COMPASScovariate replicates
-sim.rep = 3
+sim.rep = 4
 
 #Total counts
 e.total.mu = 10000 #Mean total number of events per subject
@@ -214,17 +214,20 @@ e.subset.sd = 5   #SD of number of events per subject that are not in the Kth ca
 #Betas
 beta.mu = 0
 beta.sigma = 0.8
-beta.unif.min = 6
-beta.unif.max = 8
-int.mu = -3
+beta.unif.min = -2
+beta.unif.max = 2
+int.mu = 0
 int.sd = 0.1
-beta.selection.cutoff = 0.2
+beta.selection.cutoff = 0.05
 
 #HIV+ and HIV- subjects
 prob.hiv.pos = 0.2
 age.mean.hiv.neg = 0.5
 age.mean.hiv.pos = -0.5
 age.sd = 0.8
+
+age2.mean = 45
+age2.sd = 13
 
 ### Pu and Ps
 a.u = 50
@@ -270,23 +273,24 @@ conc.adjust <- function(ng, k, alpha, p) {
 ```{r}
 #Get number of threads from SLURM scheduler as # of CPUs allocated
 # threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
-threads = 20
+threads = 12
 
 #Make a single df of all combinations of parameters
 sim.pars <- 
   expand.grid(I = c(50),#, 60, 100, 200),   #Number of subjects
               K = c(16),        #Number of unique cell subsets
               p = c(0),         #Number of covariates IN ADDITION TO AGE | HIV status
-              prob.hiv.pos = c(0.05, 0.1, 0.5),    #Proportion with binary indicator == 1
-              beta.unif.min = c(6, 3.5),         #Lower bound on beta1 distribution
-              beta.unif.max = c(8, 4)          #Upper bound on beta1 distribution
+              # prob.hiv.pos = c(0.05, 0.1, 0.5),    #Proportion with binary indicator == 1
+              beta.unif.min = c(-2, -3, -4),         #Lower bound on beta1 distribution
+              beta.unif.max = c(0, 0, 0)          #Upper bound on beta1 distribution
               
   ) %>%
   
   #Remove unwanted combinations
   filter(beta.unif.min <= beta.unif.max &
-         beta.unif.max - beta.unif.min <= 2
-  )
+         beta.unif.max - beta.unif.min <= 4
+  ) %>%
+  filter(!duplicated(.))
 
 #Repeat the df to create replicates for each combination -- repeat 'sim.rep' times
 sim.pars <- do.call('rbind', lapply(1:sim.rep, FUN = function(simrep) {
@@ -356,9 +360,14 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
     #First column is 1s for intercept
     int = rep(1, I*1),
     #HIV status
-    hiv = sample(c(1, 0), size = I, replace = T, prob = c(prob.hiv.pos, 1-prob.hiv.pos)),
+    # hiv = sample(c(1, 0), size = I, replace = T, prob = c(prob.hiv.pos, 1-prob.hiv.pos)),
     #Age
-    age = rep(NA, I)
+    # age = rep(NA, I)
+    age2 = rnorm(n = I,
+                 mean = age2.mean,
+                 sd = age2.sd
+      ) %>%
+      scale(center = TRUE, scale = TRUE)
   )
   
   #Add remainder of covariates if any
@@ -373,18 +382,18 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   }
   
   #Add age | HIV
-  covar <- covar %>%
-    mutate(age = replace(age, hiv == 0, rnorm(n = sum(hiv == 0),
-                                              mean = age.mean.hiv.neg,
-                                              sd = age.sd
-    )
-    ),
-    age = replace(age, hiv == 1, rnorm(n = sum(hiv == 1),
-                                       mean = age.mean.hiv.pos,
-                                       sd = age.sd
-    )
-    )
-    )
+  # covar <- covar %>%
+  #   mutate(age = replace(age, hiv == 0, rnorm(n = sum(hiv == 0),
+  #                                             mean = age.mean.hiv.neg,
+  #                                             sd = age.sd
+  #   )
+  #   ),
+  #   age = replace(age, hiv == 1, rnorm(n = sum(hiv == 1),
+  #                                      mean = age.mean.hiv.pos,
+  #                                      sd = age.sd
+  #   )
+  #   )
+  #   )
   #Plot age | HIV
   # covar %>%
   #   ggplot(aes(x = age,
@@ -395,7 +404,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   
   #Matrix matrix version without HIV status
   X = covar %>%
-    dplyr::select(-age) %>%
+    # dplyr::select(-age2) %>%
     as.matrix()
   
   #####################
@@ -705,7 +714,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
                        K1,
                        p,
                        sim_rep,
-                       prob.hiv.pos,
+                       # prob.hiv.pos,
                        beta.unif.min,
                        beta.unif.max
   )
@@ -721,7 +730,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
                            'K1',
                            'p',
                            'sim_rep',
-                           'prob.hiv.pos',
+                           # 'prob.hiv.pos',
                            'beta.unif.min',
                            'beta.unif.max'
                           )
@@ -928,10 +937,10 @@ do.call('rbind',
     colnames(omega.diff.compass) <- NULL
     
     #Create datasets
-    omega.diff.covar.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
+    omega.diff.covar.df <- data.frame(age2 = as.factor(sim$sim.fit$data$meta$age2),
                                             omega.diff.covar
     )
-    omega.diff.compass.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
+    omega.diff.compass.df <- data.frame(age2 = as.factor(sim$sim.fit$data$meta$age2),
                                               omega.diff.compass
     )
     
@@ -1089,12 +1098,8 @@ do.call('rbind',
     colnames(true.gamma.diff.compass) <- NULL
     
     #Create datasets
-    true.gamma.diff.covar.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
-                                            true.gamma.diff.covar
-    )
-    true.gamma.diff.compass.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
-                                              true.gamma.diff.compass
-    )
+    true.gamma.diff.covar.df <- data.frame(true.gamma.diff.covar)
+    true.gamma.diff.compass.df <- data.frame(true.gamma.diff.compass)
     
     #Combine datasets in long format
     true.gamma.diff.df <-
@@ -1249,9 +1254,7 @@ lapply(sim.out.list, FUN = function(sim) {
   colnames(mean.gamma.diff) <- NULL
   
   #Create datasets
-  mean.gamma.diff.df <- data.frame(hiv = as.factor(sim$sim.fit$data$meta$hiv),
-                                   mean.gamma.diff
-  )
+  mean.gamma.diff.df <- data.frame(mean.gamma.diff)
   
   #Subset columns where there are any differences
   mean.gamma.diff <- mean.gamma.diff[, abs(colSums(mean.gamma.diff)) > 0]
