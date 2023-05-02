@@ -1333,46 +1333,25 @@ Is the precision of the estimates lower for COMPASS without a covariate?
 ```{r}
 do.call('rbind', 
   lapply(sim.out.list, FUN = function(sim) {
-    #Combine columns
-    do.call('rbind',
-      #Loop over columns
-      apply(
-        #Find differences in variance between COMPASS - COMPASScov for all I x K
-        apply(sim$compass.fit$fit$fit$gamma, MARGIN = c(1,2), var) - 
-          apply(sim$sim.fit$fit$gamma, MARGIN = c(1,2), var),
-        MARGIN = 2,
-        FUN = function(x) {
-          
-          #Make a dataframe of the sum of the diff in variance for all subsets
-          dat = data.frame(
-            diff.precision = sum(x)
-          )
-          
-          # #Plot a histogram of the var diffs
-          # ggplot(data = dat,
-          #        aes(x = diff.precision)
-          # )+
-          # geom_histogram()
-          
-          return(dat)
-        }
-      )
+    data.frame(
+      tot.var.compass.cov = sum(apply(sim$sim.fit$fit$gamma, MARGIN = c(1,2), var)),
+      tot.var.compass = sum(apply(sim$compass.fit$fit$fit$gamma, MARGIN = c(1,2), var))
     ) %>%
-      #Find the sum of all columns
-      sum() %>%
-      data.frame(
-        sim.rep = sim$sim_rep,
-        N.subjects = sim$I,
-        Prob.covar = sim$prob.hiv.pos,
-        Beta.unif.min = sim$beta.unif.min,
-        Beta.unif.max = sim$beta.unif.max,
-        total.diff.var = .
-      )
+    mutate(
+      CC.minus.C = tot.var.compass - tot.var.compass.cov,
+      CC.prop.C = tot.var.compass.cov / tot.var.compass,
+      sim.rep = sim$sim_rep,
+      N.subjects = sim$I,
+      # Prob.covar = sim$prob.hiv.pos,
+      Beta.unif.min = sim$beta.unif.min,
+      Beta.unif.max = sim$beta.unif.max
+  )
   })
 ) %>%
-  group_by(N.subjects, Prob.covar, Beta.unif.min, Beta.unif.max) %>%
+  group_by(N.subjects, Beta.unif.min, Beta.unif.max) %>%
   summarize(N.rep = n(),
-            Mean.total.diff.var = mean(total.diff.var)
+            Mean.CC.minus.C = mean(CC.minus.C),
+            Mean.CC.prop.C = mean(CC.prop.C)
   )
 ```
 
