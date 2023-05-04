@@ -277,7 +277,7 @@ threads = 12
 
 #Make a single df of all combinations of parameters
 sim.pars <- 
-  expand.grid(I = c(50),#, 60, 100, 200),   #Number of subjects
+  expand.grid(I = c(50),#, 100, 200),   #Number of subjects
               K = c(16),        #Number of unique cell subsets
               p = c(0),         #Number of covariates IN ADDITION TO AGE | HIV status
               # prob.hiv.pos = c(0.05, 0.1, 0.5),    #Proportion with binary indicator == 1
@@ -811,12 +811,12 @@ do.call('rbind',
       
       #Loop over cell subsets and find sum of squared error (omega - mean_gamma)^2
       summarize_at(vars(cluster1:cluster15),
-                   ~ sum(.x^2)
+                   ~ sum(abs(.x))
       ) %>%
       ungroup() %>%
       
       #Find total SSE across all cell subsets
-      mutate(SSE.total = rowSums(across(starts_with("cluster")))
+      mutate(SAE.total = rowSums(across(starts_with("cluster")))
       ) %>%
       
       #Find COMPASScov - COMPASS in SSE
@@ -833,7 +833,7 @@ do.call('rbind',
                 )
       ) %>%
       
-      relocate(SSE.total, .after = model) %>%
+      relocate(SAE.total, .after = model) %>%
 
       mutate(#per.covar = sim$prob.hiv.pos,
              N.subj = sim$I,
@@ -841,7 +841,7 @@ do.call('rbind',
              beta.unif.max = sim$beta.unif.max
       ) %>%
       # relocate(per.covar, .before = SSE.total) %>%
-      relocate(beta.unif.min, .before = SSE.total) %>%
+      relocate(beta.unif.min, .before = SAE.total) %>%
       relocate(beta.unif.max, .after = beta.unif.min)
 
 
@@ -850,7 +850,7 @@ do.call('rbind',
   ) %>%
   group_by(N.subj, beta.unif.min, beta.unif.max, model) %>%
   summarize(N.rep = n(),
-            mean.SSE.total = mean(SSE.total)
+            mean.SAE.total = mean(SAE.total)
   )
 ```
 
@@ -949,8 +949,8 @@ do.call('rbind',
       tot.var.compass = sum(apply(sim$compass.fit$fit$fit$gamma, MARGIN = c(1,2), var))
     ) %>%
     mutate(
-      CC.minus.C = tot.var.compass - tot.var.compass.cov,
-      CC.prop.C = tot.var.compass.cov / tot.var.compass,
+      C.minus.CC = tot.var.compass - tot.var.compass.cov,
+      C.prop.CC = tot.var.compass.cov / tot.var.compass,
       sim.rep = sim$sim_rep,
       N.subjects = sim$I,
       # Prob.covar = sim$prob.hiv.pos,
@@ -961,8 +961,8 @@ do.call('rbind',
 ) %>%
   group_by(N.subjects, Beta.unif.min, Beta.unif.max) %>%
   summarize(N.rep = n(),
-            Mean.CC.minus.C = mean(CC.minus.C),
-            Mean.CC.prop.C = mean(CC.prop.C)
+            Mean.C.minus.CC = mean(C.minus.CC),
+            Mean.C.prop.CC = mean(C.prop.CC)
   )
 ```
 
