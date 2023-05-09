@@ -201,7 +201,7 @@ set.seed(111)
 # rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
 # sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter combination
 
-iter = 25000 #Number of COMPASScovariate iterations per replicate
+iter = 50000 #Number of COMPASScovariate iterations per replicate
 rep = 2     #Number of COMPASScovariate replicates
 sim.rep = 4
 
@@ -273,22 +273,21 @@ conc.adjust <- function(ng, k, alpha, p) {
 ```{r}
 #Get number of threads from SLURM scheduler as # of CPUs allocated
 # threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
-threads = 12
+threads = 20
 
 #Make a single df of all combinations of parameters
 sim.pars <- 
   expand.grid(I = c(50),#, 100, 200),   #Number of subjects
               K = c(16),        #Number of unique cell subsets
-              p = c(0),         #Number of covariates IN ADDITION TO AGE | HIV status
+              p = c(2),         #Number of covariates IN ADDITION TO AGE | HIV status
               # prob.hiv.pos = c(0.05, 0.1, 0.5),    #Proportion with binary indicator == 1
-              beta.unif.min = c(-2, -3, -4),         #Lower bound on beta1 distribution
-              beta.unif.max = c(0, 0, 0)          #Upper bound on beta1 distribution
+              beta.unif.min = c(0, -1, -2, -3, -4),         #Lower bound on beta1 distribution
+              beta.unif.max = c(0, -0.8, -1.8, -2.8, -3.8)          #Upper bound on beta1 distribution
               
   ) %>%
-  
+
   #Remove unwanted combinations
-  filter(beta.unif.min <= beta.unif.max &
-         beta.unif.max - beta.unif.min <= 4
+  filter((beta.unif.min <= beta.unif.max & dplyr::near(beta.unif.max - beta.unif.min, 0.2)) | (dplyr::near(beta.unif.min, 0) & dplyr::near(beta.unif.max, 0))
   ) %>%
   filter(!duplicated(.))
 
@@ -301,6 +300,7 @@ sim.pars <- do.call('rbind', lapply(1:sim.rep, FUN = function(simrep) {
   })
 )
 ```
+
 
 ### Run Simulation
 
@@ -344,7 +344,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   nrow = K1
   )
   #Convert all but 6 betas to 0
-  # beta.true[sample(1:length(beta.true),size = K1 - 6)] = 0
+  beta.true[sample(1:length(beta.true),size = K1 - 6)] = 0
   
   #Variable selection -- if |true beta| < 0.5, then true beta = 0
   beta.true.selection = apply(beta.true, MARGIN = c(1,2), FUN = function(x) ifelse(abs(x) < beta.selection.cutoff, 0, x))
@@ -373,9 +373,10 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   #Add remainder of covariates if any
   if (p > 1) {
     covar <- cbind(covar,
-                   matrix(rnorm(n = I),
+                   matrix(rnorm(n = I*(p-1)),
                           ncol = p-1,
                           nrow = I,
+                          byrow = FALSE,
                           dimnames = list(NULL, paste0("V", 2:(p)))
                    )
     )
@@ -774,6 +775,7 @@ lapply(sim.out.list, FUN = function(fit) {
 
 #### Summaries
 
+Compare sum of absolute error between models
 ```{r}
 do.call('rbind',
   lapply(sim.out.list, FUN = function(sim) {
@@ -852,6 +854,150 @@ do.call('rbind',
   summarize(N.rep = n(),
             mean.SAE.total = mean(SAE.total)
   )
+```
+
+Find subjects with highest absolute error by model and examine covariate values
+```{r}
+do.call('rbind',
+  lapply(sim.out.list, FUN = function(sim) {
+    #Omega - mean_gamma
+    omega.diff.covar <- sim$omega - sim$sim.fit$fit$mean_gamma[,1:sim$K1]
+    omega.diff.compass <- sim$omega - sim$compass.fit$fit$fit$mean_gamma[,1:sim$K1]
+    colnames(omega.diff.compass) <- NULL
+    
+    #Create datasets
+    omega.diff.covar.df <- data.frame(age2 = as.factor(sim$sim.fit$data$meta$age2),
+                                            omega.diff.covar
+    )
+    omega.diff.compass.df <- data.frame(age2 = as.factor(sim$sim.fit$data$meta$age2),
+                                              omega.diff.compass
+    )
+    
+    #Combine datasets in long format
+    omega.diff.df <-
+      bind_rows(
+        omega.diff.covar.df %>%
+          mutate(model = "COMPASScovariate",
+                 subject = as.character(1:sim$I)
+          ),
+        omega.diff.compass.df %>%
+          mutate(model = "COMPASS",
+                 subject = as.character(1:sim$I)
+          )
+      )
+    
+    #Rename columns
+    colnames(omega.diff.df) <- gsub("^X", "cluster", colnames(omega.diff.df))
+    
+    #Calculate per gamma correct
+    omega.diff.df %>%
+      
+      #Find the sum of absolute error for each subject across all cell subsets
+      mutate(sum.abs.dev = rowSums(across(starts_with("cluster"),
+                                     ~ abs(.x)))) %>%
+      
+      #Group by model
+      group_by(model) %>%
+      
+      #Find the subject with the maximum sum of absolute error for each model
+      slice_max(n = 1,
+                sum.abs.dev
+      ) %>%
+      select(subject, model, sum.abs.dev) %>%
+      
+      #Join with the subject-level covariate dataset by subject
+      inner_join(.,
+                 sim$sim.fit$data$meta %>%
+                   select(age2, V2, V3) %>%
+                   tibble::rownames_to_column(var = "subject"),
+                 by = "subject"
+      ) %>%
+      
+      #Convert the covariate values to percentiles from the standard normal (they were created as such or scaled)
+      mutate(across(starts_with(c("age", "V")),
+                    ~ pnorm(q = .x))
+      ) %>%
+      
+      #Add sim pars
+      mutate(rep = sim$sim_rep,
+             N.subj = sim$I,
+             beta.unif.min = sim$beta.unif.min,
+             beta.unif.max = sim$beta.unif.max
+      ) %>%
+      relocate(N.subj, .before = subject) %>%
+      relocate(rep, .after = N.subj) %>%
+      relocate(beta.unif.min, .after = rep) %>%
+      relocate(beta.unif.max, .after = beta.unif.min)
+      
+      
+  })
+)
+```
+
+Find subjects with max absolute difference for specific cell subsets for a specific simulation
+```{r}
+#Pick the first output for rep 1 with the most extreme beta values
+sim = sim.out.list[[which(sim.pars$sim_rep == 1 & sim.pars$beta.unif.min == min(sim.pars$beta.unif.min))]]
+#Omega - mean_gamma
+omega.diff.covar <- abs(sim$omega - sim$sim.fit$fit$mean_gamma[,1:sim$K1])
+omega.diff.compass <- abs(sim$omega - sim$compass.fit$fit$fit$mean_gamma[,1:sim$K1])
+colnames(omega.diff.compass) <- NULL
+
+##################################
+#Find subjects with maximum values
+covar.subj <-
+which(omega.diff.covar == max(omega.diff.covar),
+      arr.ind = TRUE
+) %>%
+as.data.frame() %>%
+summarize(subject = unique(row)) %>%
+mutate(model = "COMPASScov")
+
+compass.subj <-
+which(omega.diff.compass == max(omega.diff.compass),
+      arr.ind = TRUE
+) %>%
+as.data.frame() %>%
+summarize(subject = unique(row)) %>%
+mutate(model = "COMPASS")
+
+
+#Combine datasets in long format
+subj.comb <-
+bind_rows(
+  covar.subj,
+  compass.subj
+)
+
+
+#Get the subject covariates
+subj.comb %>%
+  
+  #Join with the subject-level covariate dataset by subject
+  inner_join(.,
+             sim$sim.fit$data$meta %>%
+               select(age2, V2, V3) %>%
+               tibble::rownames_to_column(var = "subject") %>%
+               mutate(subject = as.integer(subject)),
+             by = "subject"
+  ) %>%
+  
+  #Convert the covariate values to percentiles from the standard normal (they were created as such or scaled)
+  mutate(across(starts_with(c("age", "V")),
+                ~ pnorm(q = .x))
+  ) %>%
+  
+  #Add sim pars
+  mutate(rep = sim$sim_rep,
+         N.subj = sim$I,
+         beta.unif.min = sim$beta.unif.min,
+         beta.unif.max = sim$beta.unif.max
+  ) %>%
+  relocate(N.subj, .before = subject) %>%
+  relocate(rep, .after = N.subj) %>%
+  relocate(beta.unif.min, .after = rep) %>%
+  relocate(beta.unif.max, .after = beta.unif.min)
+
 ```
 
 
