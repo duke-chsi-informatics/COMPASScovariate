@@ -1168,3 +1168,25 @@ do.call('rbind',
   )
 ```
 
+
+
+## Variable Selection
+
+Proportion of intervals (betas) that contain 0 for which the true beta is 0?
+
+If true beta is 0, does interval contain 0?
+If true beta is not 0, does interval not contain 0?
+
+Find the mean across the replications
+
+```{r}
+
+```
+
+## Prediction Accuracy
+
+- Generate new data covariates
+- Take mean, median, mode of beta posteriors. Or generate 
+- Posterior sample of beta, to generate probs, then mean of probs
+- Compare to true probs (omega)
+
