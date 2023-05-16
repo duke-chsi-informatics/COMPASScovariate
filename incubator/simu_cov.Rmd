@@ -1170,17 +1170,48 @@ do.call('rbind',
 
 
 
-## Variable Selection
+### Variable Selection for Betas
 
-Proportion of intervals (betas) that contain 0 for which the true beta is 0?
+**Goal:** Examine the proportion of intervals for beta that contain 0 for which the true beta is 0
 
-If true beta is 0, does interval contain 0?
-If true beta is not 0, does interval not contain 0?
+- If true beta is 0, does interval contain 0?
+- If true beta is not 0, does interval not contain 0?
 
-Find the mean across the replications
+**Note:** Only examine beta1 (slopes) because no variable selection for the true beta0 was performed, so none are exactly 0.
 
 ```{r}
-
+do.call('rbind', 
+  lapply(sim.out.list, FUN = function(sim) {
+    
+    #Beta 1
+    data.frame(
+      true.mean = sim$beta.true.final[,2],
+      post.LCL.95 = apply(sim$sim.fit$fit$beta, MARGIN = c(1,2), FUN = function(x) quantile(x, 0.025))[,2],
+      post.UCL.95 = apply(sim$sim.fit$fit$beta, MARGIN = c(1,2), FUN = function(x) quantile(x, 0.975))[,2]
+      ) %>%
+      
+      summarize(
+                beta1.incl.0 = sum(true.mean == 0 & post.LCL.95 < 0 & post.UCL.95 > 0) / sum(true.mean == 0),
+                beta1.excl.0 = sum(true.mean != 0 & ( post.UCL.95 < 0 | post.LCL.95 > 0)) / sum(true.mean != 0),
+                true.0 = sum(true.mean == 0)
+      ) %>%
+      mutate(
+             N.subj = sim$I,
+             beta.unif.min = sim$beta.unif.min,
+             beta.unif.max = sim$beta.unif.max
+      ) %>%
+      relocate(N.subj, .before = beta1.incl.0) %>%
+      relocate(beta.unif.min, .after = N.subj) %>%
+      relocate(beta.unif.max, .after = beta.unif.min)
+  })
+) %>%
+  
+  group_by(N.subj, beta.unif.min, beta.unif.max) %>%
+  summarize(N.rep = n(),
+            Mean.beta1.incl.0 = mean(beta1.incl.0),
+            Mean.beta1.excl.0 = mean(beta1.excl.0),
+            Mean.true.0 = mean(true.0)
+  )
 ```
 
 ## Prediction Accuracy
