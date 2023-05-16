@@ -201,8 +201,8 @@ set.seed(111)
 # rep = as.integer(Sys.getenv("REP"))   #Number of COMPASScovariate replicates
 # sim.rep = as.integer(Sys.getenv("SIM_REP")) #Number of replicates per parameter combination
 
-iter = 50000 #Number of COMPASScovariate iterations per replicate
-rep = 2     #Number of COMPASScovariate replicates
+iter = 2000 #Number of COMPASScovariate iterations per replicate
+rep = 1     #Number of COMPASScovariate replicates
 sim.rep = 2
 
 #Total counts
@@ -358,12 +358,12 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   #Add int and HIV status
   covar <- data.frame(
     #First column is 1s for intercept
-    int = rep(1, I*1),
+    int = rep(1, I*2),
     #HIV status
     # hiv = sample(c(1, 0), size = I, replace = T, prob = c(prob.hiv.pos, 1-prob.hiv.pos)),
     #Age
     # age = rep(NA, I)
-    age2 = rnorm(n = I,
+    age2 = rnorm(n = I*2,
                  mean = age2.mean,
                  sd = age2.sd
       ) %>%
@@ -373,14 +373,23 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   #Add remainder of covariates if any
   if (p > 1) {
     covar <- cbind(covar,
-                   matrix(rnorm(n = I*(p-1)),
+                   matrix(rnorm(n = I*2*(p-1)),
                           ncol = p-1,
-                          nrow = I,
+                          nrow = I*2,
                           byrow = FALSE,
                           dimnames = list(NULL, paste0("V", 2:(p)))
                    )
     )
   }
+  
+  ### Make train and test versions
+  covar.train <-
+    covar %>%
+    head(n = I)
+  
+  covar.test <-
+    covar %>%
+    tail(n = I)
   
   #Add age | HIV
   # covar <- covar %>%
@@ -403,10 +412,17 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   #   geom_density(alpha = 0.7)+
   #   theme_bw()
   
-  #Matrix matrix version without HIV status
-  X = covar %>%
-    # dplyr::select(-age2) %>%
+  #################
+  # Matrix versions
+  #################
+  
+  #Train
+  X = covar.train %>%
     as.matrix()
+  
+  #Test
+  X.test = covar.test %>%
+            as.matrix()
   
   #####################
   ### True Gamma Matrix
@@ -635,8 +651,8 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   }
   
   ##
-  covar <-
-    data.frame(covar,
+  covar.train <-
+    data.frame(covar.train,
                pfs.true = pfs,
                protect.prob.true = protect.prob,
                protect.true = protect.true
@@ -648,7 +664,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
   
   ## Make metadata for COMPASS
   metadat <- 
-    covar %>%
+    covar.train %>%
     dplyr::select(-int) %>%
     mutate(sample.id = rownames(.))
   
@@ -681,7 +697,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
       counts_s=rowSums(n_s),
       counts_u=rowSums(n_u),
       categories=.fit$categories,
-      meta=covar
+      meta=covar.train
       # individual_id=individual_id
     )
   )
@@ -695,7 +711,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
       counts_s=rowSums(n_s),
       counts_u=rowSums(n_u),
       categories=.compass_fit$categories,
-      meta=covar
+      meta=covar.train
       # individual_id=individual_id
     )
   )
@@ -715,7 +731,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
                        K1,
                        p,
                        sim_rep,
-                       # prob.hiv.pos,
+                       X.test,
                        beta.unif.min,
                        beta.unif.max
   )
@@ -731,7 +747,7 @@ sim.out.list <- foreach(s = 1:nrow(sim.pars), .packages = c("COMPASS", "dplyr", 
                            'K1',
                            'p',
                            'sim_rep',
-                           # 'prob.hiv.pos',
+                           'X.test',
                            'beta.unif.min',
                            'beta.unif.max'
                           )
