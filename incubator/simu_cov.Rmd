@@ -203,7 +203,7 @@ set.seed(111)
 
 iter = 50000 #Number of COMPASScovariate iterations per replicate
 rep = 2     #Number of COMPASScovariate replicates
-sim.rep = 4
+sim.rep = 2
 
 #Total counts
 e.total.mu = 10000 #Mean total number of events per subject
@@ -273,7 +273,7 @@ conc.adjust <- function(ng, k, alpha, p) {
 ```{r}
 #Get number of threads from SLURM scheduler as # of CPUs allocated
 # threads = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"))
-threads = 20
+threads = 2
 
 #Make a single df of all combinations of parameters
 sim.pars <- 
@@ -281,8 +281,8 @@ sim.pars <-
               K = c(16),        #Number of unique cell subsets
               p = c(2),         #Number of covariates IN ADDITION TO AGE | HIV status
               # prob.hiv.pos = c(0.05, 0.1, 0.5),    #Proportion with binary indicator == 1
-              beta.unif.min = c(0, -1, -2, -3, -4),         #Lower bound on beta1 distribution
-              beta.unif.max = c(0, -0.8, -1.8, -2.8, -3.8)          #Upper bound on beta1 distribution
+              beta.unif.min = c(-4),#c(0, -1, -2, -3, -4),         #Lower bound on beta1 distribution
+              beta.unif.max = c(-3.8)#c(0, -0.8, -1.8, -2.8, -3.8)          #Upper bound on beta1 distribution
               
   ) %>%
 
