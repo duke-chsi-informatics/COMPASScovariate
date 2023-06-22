@@ -1,0 +1,445 @@
+---
+title: "COVID"
+output: html_document
+date: "2023-05-24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(COMPASS)
+library(doParallel)
+library(RColorBrewer)
+library(circlize)
+library(ggsci)
+library(Rcpp)
+
+source("~/CHSI/PackageDev/COMPASScovariate/R/COMPASS-covariate.R")
+source("~/CHSI/PackageDev/COMPASScovariate/R/updatebeta.R")
+source("~/CHSI/PackageDev/COMPASScovariate/R/utils.R")
+
+parentDirectory <- "~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/COVID/"
+```
+
+## COVID Read-in
+
+We get the counts matrices from COMPASS objects saved here: https://github.com/seshadrilab/Correlates_Severe_COVID19_ICS/tree/master/out/CompassOutput/4%2B/NCAP
+
+The antibody data is here: https://github.com/seshadrilab/Correlates_Severe_COVID19_Surface_Markers/tree/master/processed_data
+
+From the paper:
+
+"To ensure the detection of polyfunctional T cell subsets that may be present at low frequencies, we employed Combinatorial Polyfunctionality Analysis of Antigen-Specific T Cell Subsets (COMPASS) (38). Among 128 possible functional profiles, we detected 21 antigen-specific CD4+ T cell subsets across all 4 peptide pool stimulations (Figure 3A). Notably, the probability of detecting a particular response varied according to the antigen. For example, several profiles containing 3 or 4 functions were readily detected after stimulation with S1, S2, or N but not E. However, the 2 profiles containing 5 functions (IFN-γ, IL-14/5/13, TNF, IL-2, and CD40L) were only detected after stimulation with S1. Stimulation with E resulted in a CD107a monofunctional profile that was also observed after stimulation with S2 (Figure 3A)."
+
+- Functional diversity of CD4+ T cell responses to SARS-CoV-2 are associated with hospitalization.
+
+On antibodies: "Archived serum was used to compare neutralizing antibody titers, as well as Ig levels, Fc receptor (FcR) binding, and Fc effector functions targeting full spike (S), S1, S2, receptor binding domain (RBD), and nucleocapsid (N) proteins...Antibody functional profiles are associated with hospitalization after COVID-19. To follow up these differences in Ig subclass, we examined several Fc-binding specificities and Fc-dependent effector functions. Fc-receptors (FcRs) specificities FcR2A, FcR2B, FcR3A, and FcR3B binding S, S1, S2, RBD, and N were significantly higher among hospitalized subjects (Supplemental Figure 2B). Antibody-dependent cellular phagocytosis (ADCP), antibody-dependent neutrophil phagocytosis (ADNP), and antibody-dependent complement deposition (ADCP) against S, RBD, and N was significantly increased among hospitalized subjects (Figure 2A). Notably, while MIP-1β secretion by NK cells was increased among hospitalized subjects, NK cell degranulation measured by CD107a expression was elevated among nonhospitalized subjects (Figure 2B). To obtain a qualitative summary of the differences in antigen-specific humoral responses between groups, we visualized Ig subclass, Fc-binding specificity, and Fc-effector functions targeting S, RBD, and N using nightingale rose graphs (Figure 2C). The results show consistently higher levels of measured analytes among hospitalized subjects, with the exception of CD107a expression on NK cells. We next examined the correlation of antibody profiles independently in hospitalized and nonhospitalized subjects. The correlation with neutralization titers in both groups was low, supporting our analysis of nonredundant aspects of the SARS-CoV-2–specific antibody response. This was surprising, given previous findings that IgG antibodies to RBD are correlated with neutralization titers (34, 35). Relative to nonhospitalized subjects, hospitalized subjects demonstrated lower correlation among antibody titers, Fc-specificities, and Fc-effector functions (Figure 2D). This difference was robust to subsampling in order to account for the unequal sample sizes in each group (Supplemental Figure 3). Finally, we calculated a polyfunctionality score for each individual for S, RBD, and N over the 6 antibody functionality readouts against 3 SARS-CoV-2 antigens. Subjects with comorbidities were able to activate a robust polyfunctional antibody response against S, RBD, and N in comparison with subjects without comorbidities (Figure 2E)." 
+
+We don't have antibody data access, unfortunately, so let's turn to more flow parameters:
+
+"In our matched cross-sectional analysis, we noted that the frequency of CD3+, CD4+, and CD8+ T cells did not vary significantly over time since symptom onset or between hospitalized and nonhospitalized subjects (Figure 1, D–F, and Supplemental Figures 1C). We also found no difference in the frequency of γδ T cells, iNKT cells, or MAIT cells or in B cells, monocytes, or NK cells (Figure 1G and Supplemental Figure 5, A and B). However, the frequency of activated CD8+ T cells was significantly higher among hospitalized subjects, which is consistent with prior reports (Figure 1F) (19, 36, 37). The frequency of naive CD8+ T cells was also lower among hospitalized subjects, suggesting increased differentiation to an effector phenotype in severe COVID-19; however, no difference in the frequency of naive CD4+ T cells was observed between groups (Figure 1H). Among total γδ T cells, the frequency of activated γδ T cells was higher among hospitalized subjects independent of expression of the Vδ2 gene segment (Figure 1I)."
+
+There are 20 hospitalized patients and 40 non-hospitalized (3 are healthy controls from pre-COVID times). "For the ICS panel, data from 20 convalescent hospitalized and 37 convalescent nonhospitalized subjects were ultimately analyzed. For the surface marker panel, data from 15 convalescent hospitalized and 36 convalescent nonhospitalized subjects were analyzed."
+
+As a covariate(s) we can consider using the antibodies included in the
+
+
+### Extract Count Matrices, Antibody data, and Metadata
+
+We first get the stimulated and unstimulated count matrices, antibody data, and metadata for the 60 patients in question. There are 20 hospitalized, 37 non-hospitalized, and 3 healthy control patients.
+
+There are 23 CD4+ gates and 12 CD8+ gates included in the COMPASS analysis.
+
+
+
+```{r read-in, options}
+
+CD4 <- readRDS(file.path(parentDirectory,"0-Data/Raw/COMPASSResult_4+_NCAP.rds"))
+
+CD4ns <- CD4$data$n_s
+CD4nu <- CD4$data$n_u
+
+CD4$data$meta %>%
+  drop_na() %>%
+  count(Cohort)
+
+CD8 <- readRDS(file.path(parentDirectory,"0-Data/Raw/COMPASSResult_8+_NCAP.rds"))
+
+CD8ns <- CD8$data$n_s
+CD8nu <- CD8$data$n_u
+
+```
+
+
+There are fewer patients in the flow surface dataset than the flow ICS dataset (51, which matches with what the paper says). However, a couple of those additionally don't appear in the flow dataset, leaving us with a set of 49 common samples.
+
+Should we base what surface measures we include on what the paper found noteworthy (HLADR/CD38 CD8, naive CD8, HLADR/CD38 GD, HLADR?CD38 GD/VD2+)?
+
+```{r antibodies, options}
+antibodiesDF <- read.csv(file.path(parentDirectory, "0-Data/Raw/antibodiesCOVID.csv")) %>%
+  #redundant columns
+  select(-c(CD4_CD8_ratio, GD_pct_T, HLADR_CD38_pct_GD)) %>%
+  #standardize
+  mutate(across(-SAMPLE_ID, ~scale(log(.x + 1))))
+
+
+# patients who have both antibody and counts info
+CD4finalPats <- intersect(CD4$data$meta %>% drop_na() %>% .$`SAMPLE ID`,
+                          antibodiesDF$SAMPLE_ID)
+
+CD8finalPats <- intersect(CD8$data$meta %>% drop_na() %>% .$`SAMPLE ID`,
+                          antibodiesDF$SAMPLE_ID) %>%
+  intersect(rownames(CD8ns))
+
+# CD4antibodiesDF <- antibodiesDF %>%
+#   select(-contains("CD8"))
+# 
+# CD8antibodiesDF <- antibodiesDF %>%
+#   select(-contains("CD4"))
+
+# setdiff(CD4$data$meta %>% drop_na() %>% .$`SAMPLE ID`, CD4antibodiesDF$SAMPLE_ID)
+# setdiff(CD4antibodiesDF$SAMPLE_ID, CD4$data$meta %>% drop_na() %>% .$`SAMPLE ID`)
+# 
+# # 49 patients have both antibodies and COMPASS count information
+# CD4finalPats <- intersect(CD4$data$meta %>% drop_na() %>% .$`SAMPLE ID`, CD4antibodiesDF$SAMPLE_ID)
+# 
+# # 15 hospitalized and 34 unhospitalized patients
+# CD4antibodiesDF %>%
+#   left_join(CD4$data$meta %>% rename(SAMPLE_ID=`SAMPLE ID`)) %>%
+#   count(Cohort)
+```
+
+Checking the transformed antibody distributions:
+
+```{r trans-antibody, options}
+antibodiesDF %>%
+  pivot_longer(-SAMPLE_ID, names_to = "VarName", values_to="Value") %>%
+  ggplot(aes(x=Value)) + geom_histogram() +
+  facet_wrap(.~VarName, scales = "free")
+```
+
+### PCA
+
+```{r pca, options}
+library(PCAtools)
+p <- pca(antibodiesDF %>% select(-SAMPLE_ID))
+screeplot(p)
+biplot(p, showLoadings = TRUE,
+    labSize = 5, pointSize = 5, sizeLoadingsNames = 5)
+```
+
+# Running COMPASS with the 49 Patients
+
+We run COMPASS on the 49 patients. First, the count matrices and metadata are subsetted to include only the 49 patients of interest.
+
+```{r compass-funcs, options}
+
+#------------------------------------------------------
+# FUNCTION for getting categories matrix for flow counts
+# @params: flow DF
+# @output: category matrix
+#------------------------------------------------------
+getCats <- function(stim) {
+  # finding marker names and making category count matrix
+marker_names <- unique(
+    unlist( strsplit( gsub("!", "", colnames(stim)), "&", fixed=TRUE ) )
+  )
+  n_markers <- length(marker_names)
+
+  cats <- as.data.frame( matrix(0, nrow=ncol(stim), ncol=length(marker_names)))
+  rownames(cats) <- colnames(stim)
+  colnames(cats) = marker_names
+
+  for (i in seq_along(cats)) {
+    #cats[, i] <- as.integer(grepl( paste0( colnames(cats)[i], "+" ), rownames(cats), fixed=TRUE ))
+    cats[,i] <-
+      as.integer(!grepl(paste0("!",colnames(cats)[i],"(&|$)+"),rownames(cats),fixed =
+                          FALSE))
+  }
+  cats$Counts <- apply(cats, 1, sum)
+  
+  cats <- as.matrix(cats)
+}
+
+#-------------------------------------------------------------------------
+# FUNCTION for COMPASS 
+# takes in flow data frame, metadata, iterations, suffix for naming rds file, train index (from meta)
+# TODO: fix to use COMPASS discrete? can we omit test_index by using PTID to get it later?
+#-------------------------------------------------------------------------
+COMPASS_orig <- function(n_s, n_u, individual_id, meta, iter, seed, outdir, dataName) {
+  
+  # n_s (I x K), n_u (I x K), iters, replications, X (I x J)
+  starttime = Sys.time()
+  COMPASSobj <- SimpleCOMPASS(n_s = n_s,
+                                   n_u = n_u,
+                                   meta=meta,
+                                   individual_id = individual_id,
+                                   iterations = iter,
+                                   replications = 7)
+  endtime= Sys.time()
+
+saveRDS(list(COMPASSobj = COMPASSobj, runTime = endtime-starttime),
+           paste0(outdir, "/", dataName, iter, "_seed", seed,".rds"))
+
+  
+rm(COMPASSobj)
+
+}
+
+
+#-------------------------------------------------------------------------
+# FUNCTION for COMPASS covariate
+# takes in flow data frame, covariate data frame, iterations, suffix for naming rds file, train index, seed
+#-------------------------------------------------------------------------
+COMPASS_covar <- function(n_s, n_u, X, categories, iter, seed, outdir, dataName) {
+
+  # n_s (I x K), n_u (I x K), iters, replications, X (I x J)
+  starttime = Sys.time()
+  COMPASScovarobj <- .COMPASS.covariate(n_s=n_s, n_u=n_u,
+                                         categories = categories,
+                                         iterations = iter, replications = 7, X = X)
+  endtime= Sys.time()
+
+saveRDS(list(COMPASScovarobj = COMPASScovarobj, runTime = endtime-starttime),
+          paste0(outdir, "/", dataName, iter, "_seed", seed,".rds"))
+
+rm(COMPASScovarobj)
+
+}
+
+
+#########################################################
+# FUNCTION for running COMPASS and COMPASS-covar for one seed
+# @param
+#########################################################
+runCOMPASS<- function(n_s, n_u, individual_id, meta, X, categories, iter, seed, outdir, dataName) {
+  COMPASS_orig(n_s, n_u, individual_id, meta, iter, seed, outdir, dataName)
+  COMPASS_covar(n_s, n_u, X, categories, iter, seed, outdir, paste0(dataName, "covar"))
+}
+```
+
+```{r COMPASS-prep, options}
+#--------------------------------------------------------
+# ns, nu, and meta are ordered the same
+#--------------------------------------------------------
+
+CD4ns_final <- CD4ns[rownames(CD4ns) %in% CD4finalPats,]
+CD4nu_final <- CD4nu[rownames(CD4nu) %in% CD4finalPats,]
+
+CD4meta <- CD4$data$meta[CD4$data$meta$`SAMPLE ID` %in% CD4finalPats,]
+
+CD4antibodyMat <- antibodiesDF[antibodiesDF$SAMPLE_ID %in% CD4finalPats,] %>%
+  `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
+  .[rownames(CD4ns_final),]
+
+#--------------------------------------------------------
+# CD8 inputs
+#--------------------------------------------------------
+
+CD8ns_final <- CD8ns[rownames(CD8ns) %in% CD8finalPats,]
+CD8nu_final <- CD8nu[rownames(CD8nu) %in% CD8finalPats,]
+
+CD8meta <- CD8$data$meta[CD8$data$meta$`SAMPLE ID` %in% CD8finalPats,]
+
+CD8antibodyMat <- antibodiesDF[antibodiesDF$SAMPLE_ID %in% CD8finalPats,] %>%
+  `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
+  .[rownames(CD8ns_final),]
+```
+
+We run COMPASS; it looks reasonable.
+
+```{r compass-run, options}
+# COMPASSfinalobj <- SimpleCOMPASS(ns, nu, meta,
+#               individual_id = "SAMPLE ID",
+#               iterations=20000,
+#               replications = 3)
+
+#plot(COMPASSfinalobj, y = "Cohort")
+
+seeds <- c(1, 47, 100, 99, 3)
+
+cl <- makeCluster(5) # create a cluster with 5 workers
+registerDoParallel(cl) # register the cluster for parallel computation
+
+# results <- foreach(i = 1:5, .packages = c("dplyr", "COMPASS")) %dopar% {
+#   runCOMPASS(CD4ns_final, CD4nu_final, "SAMPLE ID",
+#              CD4meta, CD4antibodyMat, getCats(CD4ns_final),
+#              iter=200000, seed=seeds[i], "/work/fwh6/COVID/out", "COMPASStest_scaledABDs")
+
+results <- foreach(i = 1:5, .packages = c("dplyr", "COMPASS")) %dopar% {
+  runCOMPASS(CD4ns_final, CD4nu_final, "SAMPLE ID",
+             CD4meta, CD4antibodyMat, getCats(CD4ns_final),
+             iter=20000, seed=seeds[i], "/work/fwh6/COVID/out", "CD4_COMPASStest_test")
+
+}
+
+stopCluster(cl) # stop the cluster
+
+ # COMPASStest <- readRDS("/work/fwh6/COVID/out/COMPASStest20_seed3.rds")
+ # COMPASScovartest <- readRDS("/work/fwh6/COVID/out/COMPASStestcovar20_seed3.rds")
+```
+
+We also run COMPASS-covariate:
+
+```{r compass-covar, options}
+
+
+# getCats(ns) -> temp
+
+# compasscovarObj <- .COMPASS.covariate(n_s=ns, n_u=nu,
+#                    categories = getCats(ns),
+#                    iterations = 20, replications = 7, X = antibodyDF %>%
+#                      `rownames<-`(.$SAMPLE_ID) %>% 
+#                      select(-SAMPLE_ID) %>%
+#                      mutate(across(everything(), ~as.numeric(.x))) %>%
+#                      as.matrix())
+```
+
+# Results
+
+We look at the following graphs:
+
+- Heatmaps 
+- Polyfunctional scores
+
+We first read in the CD4 COMPASS-covar and original objects in as lists.
+
+```{r read-in, options}
+
+CD4Objs <- readInObjs(data_dir = "/work/fwh6/COVID/out/",
+                      origpattern="COMPASStest_scaledABDs2.*",
+                      covarpattern = "COMPASStest_scaledABDscovar2.*")
+
+# covarFiles <- list.files("/work/fwh6/COVID/out/", pattern=".*test_test.*")
+# origFiles <- list.files("/work/fwh6/COVID/out/", pattern=".*test_test.*")
+# 
+# 
+# covarObjs <- vector(mode="list", length=5)
+# origObjs <- vector(mode="list", length=5)
+# 
+# # read in fold runs
+# for (i in 1:length(covarFiles)) {
+#   
+#   orig_path <- paste0("/work/fwh6/COVID/out/", origFiles[i])
+#   covar_path <- paste0("/work/fwh6/COVID/out/", covarFiles[i])
+#   
+#   origObjs[[i]] <- readRDS(orig_path)
+#   covarObjs[[i]] <- readRDS(covar_path)
+# }
+
+
+origTest <- CD4Objs$origObjs[[1]]$COMPASSobj
+
+#--------------------------------------------------------
+# Edits to COMPASScovarobj: fix in script later (TODO)
+#--------------------------------------------------------
+# return as fit-data list
+covarTest <- list(fit=CD4Objs$covarObjs[[1]]$COMPASScovarobj, data=origTest$data)
+# make sample ID rownames in meta
+rownames(covarTest$data$meta) <- covarTest$data$meta$`SAMPLE ID`
+# make beta gate rownames
+rownames(covarTest$fit$beta) <- colnames(covarTest$fit$mean_gamma)[1:(ncol(covarTest$fit$mean_gamma)-1)]
+# make beta covar colnames
+colnames(covarTest$fit$beta) <- c("Intercept", colnames(CD8antibodyMat))
+
+
+PFSdf <- data.frame(PFSOrig=PolyfunctionalityScore(origTest),
+PFSCovar=PolyfunctionalityScore.COMPASSResult(covarTest)) %>%
+  rownames_to_column(var="ID") %>%
+  pivot_longer(cols = -ID,
+               names_to = "COMPASSType",
+               values_to = "PFS") %>%
+  left_join(origTest$data$meta %>% select(`SAMPLE ID`, Cohort) %>%
+              rename(ID=`SAMPLE ID`)) 
+
+
+#--------------------------------------------------------
+# Paired boxplot for PFS change btwn covar and original
+#--------------------------------------------------------
+
+PFSdf %>% 
+  ggplot(aes(x=COMPASSType, y=PFS)) + geom_boxplot() +
+  geom_line(aes(group=ID, color=Cohort),alpha=0.5) +facet_wrap(.~Cohort)
+
+
+# ggsave(filename = file.path(parentDirectory,"2-Output/scaled_CD8COVID_PFS.png"),
+#        height = 5, width = 6)
+
+wilcox.test(PFSdf %>% filter(Cohort=="Hospitalized", COMPASSType == "PFSCovar") %>% .$PFS, PFSdf %>% filter(Cohort=="Non-hospitalized", COMPASSType == "PFSCovar") %>% .$PFS)
+
+wilcox.test(PFSdf %>% filter(Cohort=="Hospitalized", COMPASSType == "PFSOrig") %>% .$PFS, PFSdf %>% filter(Cohort=="Non-hospitalized", COMPASSType == "PFSOrig") %>% .$PFS)
+
+```
+
+
+```{r orig-plot, options}
+my_palette <- pal_igv("default", alpha=0.7)(15)
+
+
+rownames(origTest$data$meta) <- rownames(origTest$fit$mean_gamma)
+#--------------------------------------------------------
+# Plotting using Malisa's complexheatmap function
+#--------------------------------------------------------
+png(file=file.path(parentDirectory,"2-Output/scaledCOVID_orig_CD4.png"),
+    width=500, height = 750)
+origplot <- plot.COMPASSResult.ComplexHeatmap(origTest,
+                                  row_annotation = "Cohort",
+                                  row_annotation_colors = list(
+                                    "Hospitalized"=my_palette[11],
+                                    "Non-hospitalized"=my_palette[12]))
+draw(origplot)
+ dev.off()
+
+covarplot <- plot.COMPASSCovarResult.ComplexHeatmap(covarTest,
+                                       covar_to_plot = "TCM_pct_CD8",
+                                       row_annotation = "Cohort",
+                                  row_annotation_colors = list(
+                                    "Hospitalized"=my_palette[11],
+                                    "Non-hospitalized"=my_palette[12]))
+
+
+draw(covarplot)
+```
+
+### Beta Heatmap
+
+```{r beta-hm, options}
+mean_beta <- rowMeans(covarTest$fit$beta, dim=2)
+
+Heatmap(mean_beta, cluster_rows = FALSE,
+                          show_row_dend = FALSE,
+                          cluster_columns = FALSE, cluster_column_slices = FALSE)
+
+
+#--------------------------------------------------------
+# saving covar heatmap
+#--------------------------------------------------------
+
+png(file=file.path(parentDirectory,"2-Output/scaledCOVID_covar_CD4.png"),
+    width=500, height = 750)
+ covarplot <- plot.COMPASSCovarResult.ComplexHeatmap(covarTest,
+                                       covar_to_plot = colnames(mean_beta),
+                                       row_annotation = "Cohort",
+                                  row_annotation_colors = list(
+                                    "Hospitalized"=my_palette[11],
+                                    "Non-hospitalized"=my_palette[12]))
+
+draw(covarplot)
+ dev.off()
+
+
+```
+
+
+### Convergence
+
+```{r convergence, options}
+cbind(x=origTest$fit$A_gamma, y=covarTest$fit$A_gamma) %>%
+  as.data.frame() %>%
+  ggplot(aes(x=x,y=y)) +
+  geom_point() +
+  geom_abline() +
+  xlab("Original COMPASS Acceptance Rate") +
+  ylab("COMPASS-covar Acceptance Rate") +
+  ggtitle("Gamma Acceptance Rates")
+```
