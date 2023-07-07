@@ -35,6 +35,7 @@ options(knitr.duplicate.label = 'allow')
 #library(COMPASS)
 library(ggplot2)
 library(gridExtra)
+library(corrplot)
 #library(data.table.extras)
 library(osDesign)
 library(pROC)
@@ -250,6 +251,110 @@ covarQvals %>%
 
 ```
 
+# Correlation of Luminex with Antibody covariates
+
+```{r lum-corr, options}
+extendMeta <- function(fit, dat, orig, PFSname, FSname) {
+
+I <- dim(fit$data$n_s)[1] #subjects
+K <- dim(fit$data$n_s)[2] #categories
+T <- dim(fit$fit$alpha_s)[1] #
+K1 <- K-1
+M <- dim(fit$data$categories)[2]-1
+Cnames <- colnames(fit$data$n_s)
+## get the vaccination and infection status for individuals in the n_s/n_u
+## note: all individuals in n_s are in the metadata
+indiv <- rownames(fit$data$n_s) #individual PTIDs
+meta <- fit$data$meta
+vacc <- unique(meta[ meta$PTID %in% indiv, c("PTID", "vaccine")])
+vacc <- vacc[ match(indiv, vacc$PTID), ]
+rownames(vacc) <- 1:nrow(vacc)
+
+infect <- unique(meta[ meta$PTID %in% indiv, c("PTID", "infect")])
+infect <- infect[ match(indiv, infect$PTID), ]
+rownames(infect) <- 1:nrow(infect)
+
+PFS <- unique(meta[ meta$PTID %in% indiv, c("PTID", PFSname)])
+PFS <- PFS[ match(indiv, PFS$PTID), ]
+rownames(PFS) <- 1:nrow(PFS)
+
+FS <- unique(meta[ meta$PTID %in% indiv, c("PTID", FSname)])
+FS <- FS[ match(indiv, FS$PTID), ]
+rownames(FS) <- 1:nrow(FS)
+
+#meta should be already ordered by PTID like mean gamma; get rid of all-zero columns
+meta <- fit$data$meta %>% as.data.frame() 
+
+
+rownames(meta) <- 1:nrow(meta)
+
+
+#######################
+## get explanatory variables for regression
+rPTID =  unique(orig[,2:3])
+colnames(rPTID) = c("PTID", "PTID_orig")
+
+## meta$PTID <- swap( meta$PTID, rPTID$PTID_orig, rPTID$PTID )
+sel_outcome <- NULL #reorder n_s/n_u according to dat$pin
+sel_c <- NULL # which dat$pin maps with indiv
+PTID_sub <- NULL
+
+#linking datasets via the pin and rPTID
+for (ii in 1:length(dat$pin)) {
+  tpp = which(indiv == rPTID[which(rPTID[,2]==dat$pin[ii]),1])
+  if(length(tpp) >1){
+    cat(ii)
+  }
+  if (length(tpp)>0) {
+    sel_c = c(sel_c, ii)
+    sel_outcome = c(sel_outcome, tpp)
+    PTID_sub<- c(PTID_sub, rPTID[rPTID[,1] == indiv[tpp],2])
+  }
+}
+
+## already have this information: Lynn is merging flow with metadata here
+flrstatus = flrstatus[sel_c]
+IgAprim = IgAprim[sel_c]
+V2prim = V2prim[sel_c]
+NAbprim = NAbprim[sel_c]
+
+Avidprim <- Avidprim[sel_c]
+ADCCprim <- ADCCprim[sel_c]
+
+CD4ICSprim  <- CD4ICSprim[sel_c] 
+
+sex = sex[sel_c]
+risk.medium = risk.medium[sel_c]
+risk.high = risk.high[sel_c]
+stratuminds = stratuminds[sel_c]
+
+Lum = meta[sel_outcome,] %>% .$Luminex
+
+
+return(data.frame(Lum=Lum,
+                  flrstatus=flrstatus,
+                  IgAprim=IgAprim,
+                  V2prim=V2prim,
+                  NAbprim=NAbprim,
+                  Avidprim=Avidprim,
+                  ADCCprim=ADCCprim,
+                  sex=sex,
+                  risk.medium=risk.medium,
+                  risk.high=risk.high,
+                  stratuminds=stratuminds))
+}
+
+covarAntibodies <- extendMeta(covarfit, dat, orig,  "PFSRV144covar", "FSRV144covar") 
+
+#########################################################
+# Correlation between antibodies and Luminex
+#########################################################
+covarAntibodies %>%
+  select(IgAprim, V2prim, NAbprim, Avidprim, ADCCprim, Lum) %>% cor() %>%
+  corrplot()
+
+```
+
 ## Q vals Chart
 
 ```{r qcharts, fig.height=12}
@@ -409,6 +514,10 @@ ggsave("./Regression/Plots/volcano.png",grid.arrange(origVolc, covarVolc))
 ```
 
 ## AUC
+
+1. Split 80/20, LOOCV
+2. Find AUC on the test.
+3.
 
 ```{r auc, options}
 aucDF <- covarfit$data$meta %>%
