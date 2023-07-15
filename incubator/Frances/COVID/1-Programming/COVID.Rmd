@@ -112,60 +112,59 @@ surfaceDF %>% select(-SAMPLE_ID) %>% as.matrix() %>% cor() %>%
 rm(surfaceDF)
 ```
 
-```{r antibodies, options}
-#--------------------------------------------------------
-# Scaled raw surface marker percentages
-#--------------------------------------------------------
 
+### Split Train-Test Covariate Matrices for Transformation
+
+In this section, we will use folds created using the caret package to divide the covariate matrices into train-test and transform training only. The scaleCenterTest and PCATest functions will be used to transform the test covariates according to the train covariates.
+
+```{r todo, options}
 surfaceDF <- read.csv(file.path(parentDirectory, "0-Data/Raw/antibodiesCOVID.csv")) %>%
   #redundant columns
   select(-c(CD4_CD8_ratio, GD_pct_T, HLADR_CD38_pct_GD,
             Monocytes_pct_Live, CD4_pct_T, HLADR_CD38_pct_CD4, HLADR_CD38_pct_GD_Vd2Neg)) %>%
-  #center
-  mutate(across(-SAMPLE_ID, ~scale(.x)))
-
-#--------------------------------------------------------
-# Logged then scaled surface marker percentages
-#--------------------------------------------------------
-
-surfaceDF_logged <- read.csv(file.path(parentDirectory, "0-Data/Raw/antibodiesCOVID.csv")) %>%
-  #redundant columns
-  select(-c(CD4_CD8_ratio, GD_pct_T, HLADR_CD38_pct_GD,
-            Monocytes_pct_Live, CD4_pct_T, HLADR_CD38_pct_CD4, HLADR_CD38_pct_GD_Vd2Neg))  %>%
-  #standardize
-  mutate(across(-SAMPLE_ID, ~scale(log(.x + 1))))
-
+  arrange(SAMPLE_ID)
 
 # patients who have both antibody and counts info
 CD4finalPats <- intersect(CD4$data$meta %>% drop_na() %>% .$`SAMPLE ID`,
                           surfaceDF$SAMPLE_ID)
 
-CD8finalPats <- intersect(CD8$data$meta %>% drop_na() %>% .$`SAMPLE ID`,
-                          surfaceDF$SAMPLE_ID) %>%
-  intersect(rownames(CD8ns))
+CD4surfaceDF <- surfaceDF %>% filter(SAMPLE_ID %in% CD4finalPats)
 
-# CD4surfaceDF <- surfaceDF %>%
-#   select(-contains("CD8"))
-# 
-# CD8surfaceDF <- surfaceDF %>%
-#   select(-contains("CD4"))
+CD4Parts <- createDataPartition(CD4$data$meta %>% filter(`SAMPLE ID` %in% CD4finalPats) %>% .$Cohort, p=0.8, times=5)
 
-# setdiff(CD4$data$meta %>% drop_na() %>% .$`SAMPLE ID`, CD4surfaceDF$SAMPLE_ID)
-# setdiff(CD4surfaceDF$SAMPLE_ID, CD4$data$meta %>% drop_na() %>% .$`SAMPLE ID`)
-# 
-# # 49 patients have both antibodies and COMPASS count information
-# CD4finalPats <- intersect(CD4$data$meta %>% drop_na() %>% .$`SAMPLE ID`, CD4surfaceDF$SAMPLE_ID)
-# 
-# # 15 hospitalized and 34 unhospitalized patients
-# CD4surfaceDF %>%
-#   left_join(CD4$data$meta %>% rename(SAMPLE_ID=`SAMPLE ID`)) %>%
-#   count(Cohort)
+#--------------------------------------------------------
+# Train surface marker matrices (unlogged and logged)
+#--------------------------------------------------------
+
+CD4surfaceDFs.train <- lapply(CD4Parts, function(x) CD4surfaceDF[x,] %>% 
+                                `rownames<-`(c(.$SAMPLE_ID)) %>%
+                                select(-SAMPLE_ID))
+CD4surfaceDFs.unlog <- lapply(CD4surfaceDFs.train, function(x) x %>% 
+  mutate(across(everything(), ~scale(.x))))
+CD4surfaceDFs.log <- lapply(CD4surfaceDFs.train, function(x) x %>% 
+  mutate(across(everything(), ~scale(log(.x + 1)))))
+
+#--------------------------------------------------------
+# Test surface markers
+#--------------------------------------------------------
+CD4surfaceDFs.test <- lapply(CD4Parts, function(x) CD4surfaceDF[-x,] %>% 
+                                `rownames<-`(c(.$SAMPLE_ID)) %>%
+                                select(-SAMPLE_ID))
+CD4surfaceDFs.test.unlog <- lapply(1:5, function(i)
+  scaleCenterTest(CD4surfaceDFs.train[[i]], CD4surfaceDFs.test[[i]]))
+CD4surfaceDFs.test.log <- lapply(1:5, function(i)
+  scaleCenterTest(CD4surfaceDFs.train[[i]] %>% mutate(across(everything(), ~log(.x+1))), 
+                  CD4surfaceDFs.test[[i]] %>% mutate(across(everything(), ~log(.x+1)))))
+
 ```
+
+
 
 Checking the surface distributions:
 
 ```{r surface-dist, options}
-surfaceDF %>%
+CD4surfaceDFs.test.unlog[[1]] %>%
+  rownames_to_column(var="SAMPLE_ID") %>%
   pivot_longer(-SAMPLE_ID, names_to = "VarName", values_to="Value") %>%
   ggplot(aes(x=Value)) + geom_histogram() +
   facet_wrap(.~VarName, scales = "free")
@@ -174,7 +173,8 @@ surfaceDF %>%
 And the transformed antibody distributions:
 
 ```{r trans-surface, options}
-surfaceDF_logged %>%
+CD4surfaceDFs.test.log[[1]] %>%
+  rownames_to_column(var="SAMPLE_ID") %>%
   pivot_longer(-SAMPLE_ID, names_to = "VarName", values_to="Value") %>%
   ggplot(aes(x=Value)) + geom_histogram() +
   facet_wrap(.~VarName, scales = "free")
@@ -182,9 +182,29 @@ surfaceDF_logged %>%
 
 ### PCA
 
-```{r pca-logged, options}
+For PCA we first log and scale/center the train and test sets separately (unlike above, where we scale/center based on the train mean and SD). We then get loadings from the training data and apply those loadings to the test data to get transformed PCs.
 
-p <- pca(surfaceDF_logged %>% select(-SAMPLE_ID))
+```{r pca-logged, options}
+CD4surfaceDFs.test.log.forPCA <- lapply(CD4surfaceDFs.test, function(x) x %>% 
+  mutate(across(everything(), ~scale(log(.x + 1)))))
+
+#--------------------------------------------------------
+# Train and test PCA-transformed surface markers 
+# PCAtools package has misleading name: the rotated matrix is really loading
+#--------------------------------------------------------
+
+CD4surfaceDFs.pca <- lapply(CD4surfaceDFs.log, function(x) {
+  p <- prcomp(x, center=FALSE) 
+  p$x %>% as.data.frame() %>%
+    select(PC1:PC10) 
+  })
+
+# we take the rotated matrix (markers x PCs) and multiply by the test markers (obs x markers)
+CD4surfaceDFs.test.pca <- lapply(1:5,
+                                 function(i) PCATest(CD4surfaceDFs.log[[i]],
+                                                     CD4surfaceDFs.test.log.forPCA[[i]]))
+
+p <- pca(CD4surfaceDFs.log[[1]])
 screeplot(p)
 biplot(p, showLoadings = TRUE, showLoadingsNames = TRUE,
     labSize = 5, pointSize = 5, sizeLoadingsNames = 5)
@@ -193,10 +213,10 @@ biplot(p, showLoadings = TRUE, showLoadingsNames = TRUE,
 # Logged, scaled, then PCA'd surface data (first 10 components)
 #--------------------------------------------------------
 
-PCA_df_logged <- p$loadings %>% as.data.frame() %>%
-  select(PC1:PC10) %>%
-  # add Sample IDs
-  mutate(SAMPLE_ID=surfaceDF$SAMPLE_ID)
+# PCA_df_logged <- p$loadings %>% as.data.frame() %>%
+#   select(PC1:PC10) %>%
+#   # add Sample IDs
+#   mutate(SAMPLE_ID=surfaceDF$SAMPLE_ID)
 ```
 
 # Running COMPASS with the 49 Patients
@@ -473,10 +493,13 @@ my_palette <- pal_igv("default", alpha=0.7)(15)
 #--------------------------------------------------------
 
 rownames(CD4$data$meta) <- CD4$data$meta$`SAMPLE ID`
+png(file=file.path(parentDirectory,"2-Output/COVID_CD4_paper.png"),
+    width=500, height = 750)
 plot.COMPASSResult.ComplexHeatmap(CD4,
                                   row_annotation = "Cohort",
                                   row_annotation_colors = list("Non-hospitalized"=my_palette[11],
                                                                "Hospitalized" = my_palette[5]))
+dev.off()
 
 #--------------------------------------------------------
 # Original COMPASS run
@@ -541,19 +564,38 @@ CD4Orig <- readInObjs("/work/fwh6/COVID/out/200000/orig/CD4/",
                       pattern="orig20000_seed.*")
 
 #--------------------------------------------------------
+# Plot heatmaps
+#--------------------------------------------------------
+my_palette <- pal_igv("default", alpha=0.7)(15)
+for(i in 1:5) {plotHeatM(CD4Objs_all_vars_log[[i]], CD4Orig[[i]], CD4surfaceMat_log,
+          paste0(parentDirectory,"2-Output/All-Var-Log/COVID_CD4_log_allvar_seed", names(CD4Orig)[[i]],".png"),
+           "Cohort", list("Hospitalized"=my_palette[11],
+                                    "Non-hospitalized"=my_palette[12])) }
+
+for(i in 1:5) {plotHeatM(CD4Objs_all_vars_unlog[[i]], CD4Orig[[i]], CD4surfaceMat,
+          paste0(parentDirectory,"2-Output/All-Var-Unlog/COVID_CD4_unlog_allvar_seed", names(CD4Orig)[[i]],".png"),
+           "Cohort", list("Hospitalized"=my_palette[11],
+                                    "Non-hospitalized"=my_palette[12])) }
+
+for(i in 1:5) {plotHeatM(CD4Objs_pca[[i]], CD4Orig[[i]], CD4surfaceMat_PCA,
+          paste0(parentDirectory,"2-Output/PCA/COVID_CD4_pca_seed", names(CD4Orig)[[i]],".png"),
+           "Cohort", list("Hospitalized"=my_palette[11],
+                                    "Non-hospitalized"=my_palette[12])) }
+
+#--------------------------------------------------------
 # Making covar output into COMPASSObj-like list
 #--------------------------------------------------------
-origTest <- CD4Orig[[1]]$COMPASSobj
-covarTest <- COVtoCOMPASSObj(CD4Objs_all_vars_log[[1]], CD4Orig[[1]], CD4surfaceMat_log)
+# origTest <- CD4Orig[[1]]$COMPASSobj
+# covarTest <- COVtoCOMPASSObj(CD4Objs_all_vars_log[[1]], CD4Orig[[1]], CD4surfaceMat_log)
 
 #--------------------------------------------------------
 # Calculate PFS and add PFS column to meta DF
 #--------------------------------------------------------
-PFSDFcovarTest <- getPFSDF(covarTest)
-PFSDForigTest <- getPFSDF(origTest)
+# PFSDFcovarTest <- getPFSDF(covarTest)
+# PFSDForigTest <- getPFSDF(origTest)
 # 
-PFSdf <- PFSDFcovarTest %>%
-  bind_rows(PFSDForigTest)
+# PFSdf <- PFSDFcovarTest %>%
+#   bind_rows(PFSDForigTest)
 
 # covarTest$data$meta <- covarTest$data$meta %>%
 #   inner_join(PFSDFcovarTest %>% rename("SAMPLE ID"=ID))
@@ -581,34 +623,20 @@ PFSdf <- PFSDFcovarTest %>%
 
 
 ```{r orig-plot, options}
-my_palette <- pal_igv("default", alpha=0.7)(15)
 
-
-rownames(origTest$data$meta) <- rownames(origTest$fit$mean_gamma)
-#--------------------------------------------------------
-# Plotting using Malisa's complexheatmap function
-#--------------------------------------------------------
-png(file=file.path(parentDirectory,"2-Output/scaledCOVID_orig_CD4.png"),
-    width=500, height = 750)
-origplot <- plot.COMPASSResult.ComplexHeatmap(origTest,
-                                  row_annotation = "Cohort",
-                                  row_annotation_colors = list(
-                                    "Hospitalized"=my_palette[11],
-                                    "Non-hospitalized"=my_palette[12]))
-draw(origplot)
-
-png(file=file.path(parentDirectory,"2-Output/logged_allvar_COVID_CD4.png"),
-    width=500, height = 750)
-covarplot <- plot.COMPASSCovarResult.ComplexHeatmap(covarTest,
-                                       covar_to_plot = "TCM_pct_CD8",
-                                       row_annotation = "Cohort",
-                                  row_annotation_colors = list(
-                                    "Hospitalized"=my_palette[11],
-                                    "Non-hospitalized"=my_palette[12]))
-
-
-draw(covarplot)
-dev.off()
+# rownames(origTest$data$meta) <- rownames(origTest$fit$mean_gamma)
+# #--------------------------------------------------------
+# # Plotting using Malisa's complexheatmap function
+# #--------------------------------------------------------
+# png(file=file.path(parentDirectory,"2-Output/Original/COVID_CD4_orig_seed1.png"),
+#     width=500, height = 750)
+# origplot <- plot.COMPASSResult.ComplexHeatmap(origTest,
+#                                   row_annotation = "Cohort",
+#                                   row_annotation_colors = list(
+#                                     "Hospitalized"=my_palette[11],
+#                                     "Non-hospitalized"=my_palette[12]))
+# draw(origplot)
+# dev.off()
 ```
 
 ### Beta Heatmap
@@ -616,28 +644,11 @@ dev.off()
 We see which covariates are associated with various gates. 
 
 ```{r beta-hm, options}
-mean_beta <- rowMeans(covarTest$fit$beta, dim=2)
-
-Heatmap(mean_beta, cluster_rows = FALSE,
-                          show_row_dend = FALSE,
-                          cluster_columns = FALSE, cluster_column_slices = FALSE)
-
-
-#--------------------------------------------------------
-# saving covar heatmap
-#--------------------------------------------------------
-
-png(file=file.path(parentDirectory,"2-Output/scaledCOVID_covar_CD4.png"),
-    width=500, height = 750)
- covarplot <- plot.COMPASSCovarResult.ComplexHeatmap(covarTest,
-                                       covar_to_plot = colnames(mean_beta),
-                                       row_annotation = "Cohort",
-                                  row_annotation_colors = list(
-                                    "Hospitalized"=my_palette[11],
-                                    "Non-hospitalized"=my_palette[12]))
-
-draw(covarplot)
- dev.off()
+# mean_beta <- rowMeans(covarTest$fit$beta, dim=2)
+# 
+# Heatmap(mean_beta, cluster_rows = FALSE,
+#                           show_row_dend = FALSE,
+#                           cluster_columns = FALSE, cluster_column_slices = FALSE)
 
 
 ```
@@ -648,14 +659,14 @@ draw(covarplot)
 We compare the acceptance rates of COMPASS vs. COMPASS-covariate. We plot the Geweke's, Raftery and Lewis, and Heidelberg and Welch statistic for the two gates' patients' gamma values.
 
 ```{r convergence, options}
-cbind(x=origTest$fit$A_gamma, y=covarTest$fit$A_gamma) %>%
-  as.data.frame() %>%
-  ggplot(aes(x=x,y=y)) +
-  geom_point() +
-  geom_abline() +
-  xlab("Original COMPASS Acceptance Rate") +
-  ylab("COMPASS-covar Acceptance Rate") +
-  ggtitle("Gamma Acceptance Rates")
+# cbind(x=origTest$fit$A_gamma, y=covarTest$fit$A_gamma) %>%
+#   as.data.frame() %>%
+#   ggplot(aes(x=x,y=y)) +
+#   geom_point() +
+#   geom_abline() +
+#   xlab("Original COMPASS Acceptance Rate") +
+#   ylab("COMPASS-covar Acceptance Rate") +
+#   ggtitle("Gamma Acceptance Rates")
 ```
 
 ### Regression
@@ -679,13 +690,13 @@ We sample entire beta matrices and calculate the mean beta matrix. We then multi
 # seeds were done in order initially: 1, 47, 100, 99, 3
 foldsIdxnew <- sapply(names(CD4Orig), as.numeric)
 foldsCD4new <- foldsCD4[c(1, 3, 5, 2, 4)]
-origTest <- CD4Orig[[1]]$COMPASSobj
-covarTest <- COVtoCOMPASSObj(CD4Objs_all_vars_log[[1]], CD4Orig[[1]], CD4surfaceMat_log)
-
-# get test meta DF plus PFS
-testMetaObj <- testMetawPFS(foldsCD4,1, CD4meta, CD4surfaceMat_log, covarTest, "SAMPLE ID")
-
-testMetaObj
+# origTest <- CD4Orig[[1]]$COMPASSobj
+# covarTest <- COVtoCOMPASSObj(CD4Objs_all_vars_log[[1]], CD4Orig[[1]], CD4surfaceMat_log)
+# 
+# # get test meta DF plus PFS
+# testMetaObj <- testMetawPFS(foldsCD4,1, CD4meta, CD4surfaceMat_log, covarTest, "SAMPLE ID")
+# 
+# testMetaObj
 ```
 
 
@@ -694,16 +705,16 @@ testMetaObj
 We train regressions on the original and covariate datasets.
 
 ```{r label, options}
-origTestCovs <- origTest$data$meta %>%
-  inner_join(PFSDForigTest %>% rename("SAMPLE ID"=ID)) %>%
-  select(Cohort, Age, Sex, PFS) %>%
-  mutate(Cohort_Bin = if_else(Cohort=="Hospitalized", 1, 0))
-
-origTestMod <- glm(Cohort_Bin~ PFS,
-    data=origTestCovs,
-    family="binomial")
-
-summary(origTestMod)
+# origTestCovs <- origTest$data$meta %>%
+#   inner_join(PFSDForigTest %>% rename("SAMPLE ID"=ID)) %>%
+#   select(Cohort, Age, Sex, PFS) %>%
+#   mutate(Cohort_Bin = if_else(Cohort=="Hospitalized", 1, 0))
+# 
+# origTestMod <- glm(Cohort_Bin~ PFS,
+#     data=origTestCovs,
+#     family="binomial")
+# 
+# summary(origTestMod)
 
 # covarTestCovs <- covarTest$data$meta %>%
 #   select(Cohort, Age, Sex, PFS) %>%
@@ -714,10 +725,10 @@ summary(origTestMod)
 #     family="binomial")
 # 
 # summary(covarTestMod)
-trainMod <- getTrainReg(foldsCD4new, 1, CD4meta, CD4surfaceMat, covarTest,"SAMPLE ID")
-summary(trainMod)
-testProbs <- getResponseProbs("test",foldsCD4new, 1, CD4meta, CD4surfaceMat, covarTest,"SAMPLE ID")
-trainProbs <- getResponseProbs("train",foldsCD4new, 1, CD4meta, CD4surfaceMat, covarTest,"SAMPLE ID")
+# trainMod <- getTrainReg(foldsCD4new, 1, CD4meta, CD4surfaceMat, covarTest,"SAMPLE ID")
+# summary(trainMod)
+# testProbs <- getResponseProbs("test",foldsCD4new, 1, CD4meta, CD4surfaceMat, covarTest,"SAMPLE ID")
+# trainProbs <- getResponseProbs("train",foldsCD4new, 1, CD4meta, CD4surfaceMat, covarTest,"SAMPLE ID")
 ```
 
 #### Test Regression

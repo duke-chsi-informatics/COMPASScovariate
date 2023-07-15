@@ -296,7 +296,34 @@ plot.COMPASSCovarResult.ComplexHeatmap <- function(cr,
 }
 
 #--------------------------------------------------------
+# Save heatmap
+# @param: uncleaned covariate obj, uncleaned orig obj, cov matrix for colnames,
+#      path to file, row annotation column name, named list of colors
+#--------------------------------------------------------
+plotHeatM <- function(covarObj, origObj, covMat,pathtofile, row_annot, row_annot_colors) {
+
+  Obj <- COVtoCOMPASSObj(covarObj, origObj, covMat)
+  mean_beta <- rowMeans(Obj$fit$beta, dim=2)
+
+  #--------------------------------------------------------
+  # saving covar heatmap
+  #--------------------------------------------------------
+
+  png(file=pathtofile,
+      width=500, height = 750)
+  covarplot <- plot.COMPASSCovarResult.ComplexHeatmap(Obj,
+                                                      covar_to_plot = colnames(mean_beta),
+                                                      row_annotation = row_annot,
+                                                      row_annotation_colors = row_annot_colors)
+
+  draw(covarplot)
+  dev.off()
+}
+
+
+#--------------------------------------------------------
 # Fix COMPASS-covariate output into a COMPASS-like object
+# @param: uncleaned covar obj, cleaned orig obj, covariate matrix (cols needed)
 #--------------------------------------------------------
 COVtoCOMPASSObj <- function(covarObj, origObj, covMat) {
   covarNew <- list(fit=covarObj$COMPASScovarobj, data = origObj$COMPASSobj$data)
@@ -377,10 +404,23 @@ scaleCenterTest <- function(trainCov, testRawCov) {
   meanCovs <- colMeans(trainCov) %>% as.matrix() %>% t()
   sdCovs <- apply(trainCov, 2, sd)
 
+  print(paste("Mean", meanCovs))
+  print(paste("SD", sdCovs))
+
   sweep(testRawCov, 2, meanCovs, FUN="-") %>%
     sweep(2, sdCovs, FUN="/")
 }
 
+
+#--------------------------------------------------------
+# Use PCA train loadings to get test PCs
+#--------------------------------------------------------
+PCATest <- function(trainCov, testRawCov) {
+  p <- pca(trainCov)
+  as.matrix(testRawCov)%*%as.matrix(p$rotated %>% as.data.frame() %>%
+                                      select(PC1:PC10) )
+
+}
 
 #--------------------------------------------------------
 # Put together test regression input
