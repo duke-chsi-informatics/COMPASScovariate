@@ -10,7 +10,9 @@ library(tidyverse)
 library(COMPASS)
 library(doParallel)
 library(corrplot)
+library(glmnet)
 library(kableExtra)
+library(broom)
 library(PCAtools)
 library(caret)
 library(RColorBrewer)
@@ -121,15 +123,17 @@ In this section, we will use folds created using the caret package to divide the
 surfaceDF <- read.csv(file.path(parentDirectory, "0-Data/Raw/antibodiesCOVID.csv")) %>%
   #redundant columns
   select(-c(CD4_CD8_ratio, GD_pct_T, HLADR_CD38_pct_GD,
-            Monocytes_pct_Live, CD4_pct_T, HLADR_CD38_pct_CD4, HLADR_CD38_pct_GD_Vd2Neg)) %>%
-  arrange(SAMPLE_ID)
+            Monocytes_pct_Live, CD4_pct_T, HLADR_CD38_pct_CD4, HLADR_CD38_pct_GD_Vd2Neg))
 
 # patients who have both antibody and counts info
 CD4finalPats <- intersect(CD4$data$meta %>% drop_na() %>% .$`SAMPLE ID`,
                           surfaceDF$SAMPLE_ID)
 
-CD4surfaceDF <- surfaceDF %>% filter(SAMPLE_ID %in% CD4finalPats)
+CD4surfaceDF <- surfaceDF %>% filter(SAMPLE_ID %in% CD4finalPats) %>%
+  # arrange to be in same order as CD4 objects
+  arrange(factor(SAMPLE_ID,CD4finalPats))
 
+set.seed(47)
 CD4Parts <- createDataPartition(CD4$data$meta %>% filter(`SAMPLE ID` %in% CD4finalPats) %>% .$Cohort, p=0.8, times=5)
 
 #--------------------------------------------------------
@@ -158,12 +162,24 @@ CD4surfaceDFs.test.log <- lapply(1:5, function(i)
 
 ```
 
+We also do the same covariate transformations for the full set of available observations:
+
+```{r full-covars, options}
+CD4surfaceDF.full.unlog <- CD4surfaceDF %>% 
+  `rownames<-`(c(.$SAMPLE_ID))%>% 
+  select(-SAMPLE_ID) %>%
+  mutate(across(everything(), ~scale(.x)))
+CD4surfaceDF.full.log <- CD4surfaceDF %>% 
+  `rownames<-`(c(.$SAMPLE_ID))%>% 
+  select(-SAMPLE_ID) %>%
+  mutate(across(everything(), ~scale(log(.x + 1))))
+```
 
 
 Checking the surface distributions:
 
 ```{r surface-dist, options}
-CD4surfaceDFs.test.unlog[[1]] %>%
+CD4surfaceDF.full.unlog %>%
   rownames_to_column(var="SAMPLE_ID") %>%
   pivot_longer(-SAMPLE_ID, names_to = "VarName", values_to="Value") %>%
   ggplot(aes(x=Value)) + geom_histogram() +
@@ -173,7 +189,7 @@ CD4surfaceDFs.test.unlog[[1]] %>%
 And the transformed antibody distributions:
 
 ```{r trans-surface, options}
-CD4surfaceDFs.test.log[[1]] %>%
+CD4surfaceDF.full.log %>%
   rownames_to_column(var="SAMPLE_ID") %>%
   pivot_longer(-SAMPLE_ID, names_to = "VarName", values_to="Value") %>%
   ggplot(aes(x=Value)) + geom_histogram() +
@@ -210,13 +226,11 @@ biplot(p, showLoadings = TRUE, showLoadingsNames = TRUE,
     labSize = 5, pointSize = 5, sizeLoadingsNames = 5)
 
 #--------------------------------------------------------
-# Logged, scaled, then PCA'd surface data (first 10 components)
+# Full PCA-transformed covariate matrix
 #--------------------------------------------------------
 
-# PCA_df_logged <- p$loadings %>% as.data.frame() %>%
-#   select(PC1:PC10) %>%
-#   # add Sample IDs
-#   mutate(SAMPLE_ID=surfaceDF$SAMPLE_ID)
+CD4surfaceDF.full.pca <- prcomp(CD4surfaceDF.full.log,center=FALSE)$x %>%
+  as.data.frame() %>% select(PC1:PC10)
 ```
 
 # Running COMPASS with the 49 Patients
@@ -323,91 +337,140 @@ CD4nu_final <- CD4nu[rownames(CD4nu) %in% CD4finalPats,]
 CD4meta <- CD4$data$meta[CD4$data$meta$`SAMPLE ID` %in% CD4finalPats,]
 # all(rownames(CD4ns_final)==CD4meta$`SAMPLE ID`)
 
-CD4surfaceMat <- surfaceDF[surfaceDF$SAMPLE_ID %in% CD4finalPats,] %>%
-  `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
-  .[rownames(CD4ns_final),]
-# all(rownames(CD4ns_final)==rownames(CD4surfaceMat))
-
-CD4surfaceMat_log <- surfaceDF_logged[surfaceDF_logged$SAMPLE_ID %in% CD4finalPats,] %>%
-  `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
-  .[rownames(CD4ns_final),]
-
-CD4surfaceMat_PCA <- PCA_df_logged[PCA_df_logged$SAMPLE_ID %in% CD4finalPats,] %>%
-  `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
-  .[rownames(CD4ns_final),]
+# CD4surfaceMat <- surfaceDF[surfaceDF$SAMPLE_ID %in% CD4finalPats,] %>%
+#   `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
+#   .[rownames(CD4ns_final),]
+# # all(rownames(CD4ns_final)==rownames(CD4surfaceMat))
+# 
+# CD4surfaceMat_log <- surfaceDF_logged[surfaceDF_logged$SAMPLE_ID %in% CD4finalPats,] %>%
+#   `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
+#   .[rownames(CD4ns_final),]
+# 
+# CD4surfaceMat_PCA <- PCA_df_logged[PCA_df_logged$SAMPLE_ID %in% CD4finalPats,] %>%
+#   `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
+#   .[rownames(CD4ns_final),]
 
 #--------------------------------------------------------
 # CD8 inputs
 #--------------------------------------------------------
 
-CD8ns_final <- CD8ns[rownames(CD8ns) %in% CD8finalPats,]
-CD8nu_final <- CD8nu[rownames(CD8nu) %in% CD8finalPats,]
+# CD8ns_final <- CD8ns[rownames(CD8ns) %in% CD8finalPats,]
+# CD8nu_final <- CD8nu[rownames(CD8nu) %in% CD8finalPats,]
+# 
+# CD8meta <- CD8$data$meta[CD8$data$meta$`SAMPLE ID` %in% CD8finalPats,]
 
-CD8meta <- CD8$data$meta[CD8$data$meta$`SAMPLE ID` %in% CD8finalPats,]
+# CD8surfaceMat <- surfaceDF[surfaceDF$SAMPLE_ID %in% CD8finalPats,] %>%
+#   `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
+#   .[rownames(CD8ns_final),]
+# 
+# CD8surfaceMat_log <- surfaceDF_logged[surfaceDF_logged$SAMPLE_ID %in% CD8finalPats,] %>%
+#   `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
+#   .[rownames(CD8ns_final),]
+# 
+# CD8surfaceMat_PCA <- PCA_df_logged[PCA_df_logged$SAMPLE_ID %in% CD8finalPats,] %>%
+#   `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
+#   .[rownames(CD8ns_final),]
+```
 
-CD8surfaceMat <- surfaceDF[surfaceDF$SAMPLE_ID %in% CD8finalPats,] %>%
-  `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
-  .[rownames(CD8ns_final),]
+### Full Runs
 
-CD8surfaceMat_log <- surfaceDF_logged[surfaceDF_logged$SAMPLE_ID %in% CD8finalPats,] %>%
-  `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
-  .[rownames(CD8ns_final),]
+We run COMPASS-original and the three variants of COMPASS-covariate on the full set of 49 variables.
 
-CD8surfaceMat_PCA <- PCA_df_logged[PCA_df_logged$SAMPLE_ID %in% CD8finalPats,] %>%
-  `rownames<-`(.$SAMPLE_ID) %>% select(-SAMPLE_ID) %>% as.matrix() %>%
-  .[rownames(CD8ns_final),]
+```{r full-covar, options}
+# full.NS <- rep(list(CD4ns_final), 3)
+# full.NU <- rep(list(CD4nu_final), 3)
+full.covMatrices <- list(CD4surfaceDF.full.unlog, CD4surfaceDF.full.log, CD4surfaceDF.full.pca)
+full.covpaths <- c("all_vars/unlog/CD4/full", "all_vars/log/CD4/full", "pca/log/CD4/full")
+# full.CAT <- rep(list(getCats(CD4ns_final)), 3)
+# cl <- makeCluster(3) # create a cluster with 5 workers
+# registerDoParallel(cl) # register the cluster for parallel computation
+# 
+# results <- foreach(i = 1:3, .packages = c("dplyr", "COMPASS")) %dopar% {
+#   # runCOMPASS(CD4ns_final, CD4nu_final, "SAMPLE ID",
+#   #            CD4meta, covMatrices[j], getCats(CD4ns_final),
+#   #            iter=2000, seed=seeds[i], "/work/fwh6/COVID/out/2000/orig",
+#   #            "/work/fwh6/COVID/out/2000/covar", "CD4_COMPASStest_test")
+# 
+# 
+#   COMPASS_covar(full.NS[[i]],
+#                 full.NU[[i]], full.covMatrices[[i]] %>% as.matrix(),
+#                 full.CAT[[i]],
+#                 iter=40000, seed=47,
+#                 paste0("/work/fwh6/COVID/out/40000/covar/",full.covpaths[i]),
+#                 "covar")
+# }
+# 
+# stopCluster(cl) # stop the cluster
+```
+
+
+The run for COMPASS-orignal:
+
+```{r orig-full, options}
+# orig.full.iter <- 40000
+# COMPASS_orig(CD4ns_final, CD4nu_final, "SAMPLE ID",
+#              CD4meta, orig.full.iter, 47,
+#              "/work/fwh6/COVID/out/40000/orig/CD4/full/", "orig")
 ```
 
 ### Dividing into Test-Train
 
 We make a list of parameter combinations to test:
 
-- folds (CD4-fold-1 (x3), CD8-fold-1 (x3), ..., CD4-fold-5 (x3), CD8-fold-5 (x3))
-- seeds (1 (x6), 47 (x6), 100 (x6), 99 (x6), 3 (x6)))
-- cov matrices (CD4 unlog, CD4 log, CD4 PCA, CD8 unlog, CD8 log, CD8 PCA) x5
-- NS
-- NU
-- categories: (CD4 (x3), CD8 (x3)) x5
+- folds (CD4-fold-1 (x3), ..., CD4-fold-5 (x3))
+- cov matrices (CD4 unlog, CD4 log, CD4 PCA): 5 folds
+- NS (fold-1 (x3)...fold-5 (x3))
+- NU (fold-1 (x3)...fold-5 (x3))
+- categories: (CD4 (x3)) x5
 
 ```{r test-train, options}
 set.seed(47)
-foldsCD4 <- createFolds(CD4meta$`SAMPLE ID`, k=5, list=TRUE, returnTrain = TRUE)
-foldsCD8 <- createFolds(CD8meta$`SAMPLE ID`, k=5, list=TRUE, returnTrain = TRUE)
+# foldsCD4 <- createFolds(CD4meta$`SAMPLE ID`, k=5, list=TRUE, returnTrain = TRUE)
+# foldsCD8 <- createFolds(CD8meta$`SAMPLE ID`, k=5, list=TRUE, returnTrain = TRUE)
 
 
-foldedNs <- function(foldNum, reps) {
-  c(rep(list(CD4ns_final[foldsCD4[[foldNum]],]),reps),
-        rep(list(CD8ns_final[foldsCD8[[foldNum]],]), reps))
+
+foldedNs <- function(type="train", foldNum, reps) {
+  if(type=="train") {
+    c(rep(list(CD4ns_final[CD4Parts[[foldNum]],]),reps)) }
+  else {
+    c(rep(list(CD4ns_final[-CD4Parts[[foldNum]],]),reps))
+  }
 }
 
-foldedNu <- function(foldNum, reps) {
-  c(rep(list(CD4nu_final[foldsCD4[[foldNum]],]),reps),
-       rep(list(CD8nu_final[foldsCD8[[foldNum]],]),reps))
+foldedNu <- function(type="train", foldNum, reps) {
+  if(type=="train") {
+    c(rep(list(CD4nu_final[CD4Parts[[foldNum]],]),reps)) }
+  else {
+    c(rep(list(CD4nu_final[-CD4Parts[[foldNum]],]),reps))
+  }
 }
 
-foldedMeta <- function(foldNum, reps) {
-  c(rep(list(CD4meta[foldsCD4[[foldNum]],]),reps),
-       rep(list(CD8meta[foldsCD8[[foldNum]],]),reps))
+foldedMeta <- function(type="train",foldNum, reps) {
+  if(type=="train") {
+    c(rep(list(CD4meta[CD4Parts[[foldNum]],]),reps)) }
+  else {
+    c(rep(list(CD4meta[-CD4Parts[[foldNum]],]),reps))
+  }
 }
 
 # categories
-CAT <- rep(c(rep(list(getCats(CD4ns_final)), 3),
-    rep(list(getCats(CD8ns_final)),3)),5)
+CAT <- rep(list(getCats(CD4ns_final)), 15)
 
 # Ns and Nu for each simulation
-NS <- c(foldedNs(1, 3), foldedNs(2, 3), foldedNs(3, 3), foldedNs(4,3 ), foldedNs(5,3))
-NU <- c(foldedNu(1,3), foldedNu(2,3), foldedNu(3,3), foldedNu(4,3), foldedNu(5,3))
+NS <- c(foldedNs(type="train", 1, 3), foldedNs(type="train", 2, 3), foldedNs(type="train", 3, 3), foldedNs(type="train", 4,3 ), foldedNs(type="train", 5,3))
+NU <- c(foldedNu(type="train", 1,3), foldedNu(type="train", 2,3), foldedNu(type="train", 3,3), foldedNu(type="train", 4,3), foldedNu(type="train", 5,3))
 
 # seeds for each simulation
-seeds <- c(rep(1,6), rep(47,6), rep(100,6), rep(99,6), rep(3,6))
+seeds <- c(rep(1,3), rep(2,3), rep(3,3), rep(4,3), rep(5,3))
 
 # covariate matrix for each simulation
-covMatrices <- rep(list(CD4surfaceMat, CD4surfaceMat_log, CD4surfaceMat_PCA,
-                    CD8surfaceMat, CD8surfaceMat_log, CD8surfaceMat_PCA),5)
+covMatrices <- do.call(c, 
+        lapply(1:5,
+               function(i) list(CD4surfaceDFs.unlog[[i]], CD4surfaceDFs.log[[i]], CD4surfaceDFs.pca[[i]]))) 
 
 # save paths for each simulation
-covpaths <- rep(c("all_vars/unlog/CD4", "all_vars/log/CD4", "pca/log/CD4",
-              "all_vars/unlog/CD8", "all_vars/log/CD8", "pca/log/CD8"),5)
+covpaths <- rep(c("all_vars/unlog/CD4", "all_vars/log/CD4", "pca/log/CD4"),5)
 ```
 
 We run 6 covariate matrix + T-cell type combinations, crossed with 5 folds for a total of 30 runs of COMPASS-covariate.
@@ -416,10 +479,10 @@ We run 6 covariate matrix + T-cell type combinations, crossed with 5 folds for a
 
 
 
-# cl <- makeCluster(30) # create a cluster with 5 workers
+# cl <- makeCluster(15) # create a cluster with 5 workers
 # registerDoParallel(cl) # register the cluster for parallel computation
 # 
-# results <- foreach(i = 1:30, .packages = c("dplyr", "COMPASS")) %dopar% {
+# results <- foreach(i = 1:15, .packages = c("dplyr", "COMPASS")) %dopar% {
 #   # runCOMPASS(CD4ns_final, CD4nu_final, "SAMPLE ID",
 #   #            CD4meta, covMatrices[j], getCats(CD4ns_final),
 #   #            iter=2000, seed=seeds[i], "/work/fwh6/COVID/out/2000/orig",
@@ -427,12 +490,10 @@ We run 6 covariate matrix + T-cell type combinations, crossed with 5 folds for a
 # 
 # 
 #   COMPASS_covar(NS[[i]],
-#                 NU[[i]], covMatrices[[i]] %>% as.data.frame() %>%
-#                   filter(rownames(.) %in% rownames(NS[[i]])) %>%
-#                   as.matrix(),
+#                 NU[[i]], covMatrices[[i]] %>% as.matrix(),
 #                 CAT[[i]],
-#                 iter=20000, seed=seeds[i],
-#                 paste0("/work/fwh6/COVID/out/200000/covar/",covpaths[i]),
+#                 iter=40000, seed=seeds[i],
+#                 paste0("/work/fwh6/COVID/out/40000/covar/",covpaths[i]),
 #                 "covar")
 # }
 # 
@@ -441,7 +502,7 @@ We run 6 covariate matrix + T-cell type combinations, crossed with 5 folds for a
 ```
 
 
-We also run COMPASS with the 5 CD4 training sets and 5 CD8 training sets. We create a new set of simulation parameters for:
+We also run COMPASS with the 5 CD4 training sets. We create a new set of simulation parameters for:
 
 - NS (folds taken from previous): CD4-fold-1, CD8-fold-1, CD4-fold-2, etc.
 - NU (folds taken from previous): CD4-fold-1, CD8-fold-1, CD4-fold-2, etc
@@ -450,27 +511,65 @@ We also run COMPASS with the 5 CD4 training sets and 5 CD8 training sets. We cre
 - output directory (orig/CD4 or orig/CD8)
 
 ```{r compass-orig-setup, options}
-NS.orig <- c(foldedNs(1, 1), foldedNs(2, 1), foldedNs(3, 1), foldedNs(4,1), foldedNs(5,1))
-NU.orig <- c(foldedNu(1,1), foldedNu(2,1), foldedNu(3,1), foldedNu(4,1), foldedNu(5,1))
-meta.orig <-c(foldedMeta(1,1), foldedMeta(2,1), foldedMeta(3,1), foldedMeta(4,1), foldedMeta(5,1))
-seeds.orig <- c(rep(1,2), rep(47,2), rep(100,2), rep(99,2), rep(3,2))
-origpaths <- rep(c("CD4", "CD8"), 5)
+NS.orig <- c(foldedNs(type="train", 1, 1), foldedNs(type="train", 2, 1), foldedNs(type="train", 3, 1), foldedNs(type="train", 4,1), foldedNs(type="train", 5,1))
+NU.orig <- c(foldedNu(type="train", 1,1), foldedNu(type="train", 2,1), foldedNu(type="train", 3,1), foldedNu(type="train", 4,1), foldedNu(type="train", 5,1))
+meta.orig <-c(foldedMeta(type="train", 1,1), foldedMeta(type="train", 2,1), foldedMeta(type="train", 3,1), foldedMeta(type="train", 4,1), foldedMeta(type="train", 5,1))
+seeds.orig <- c(rep(1,1), rep(2,1), rep(3,1), rep(4,1), rep(5,1))
+origpaths <- rep(c("CD4"), 5)
 ```
 
 ```{r compass-orig, options}
 
-# cl <- makeCluster(10) # create a cluster with 5 workers
+# cl <- makeCluster(5) # create a cluster with 5 workers
 # registerDoParallel(cl) # register the cluster for parallel computation
 # 
-# results <- foreach(i = 1:10, .packages = c("dplyr", "COMPASS")) %dopar% {
+# results <- foreach(i = 1:5, .packages = c("dplyr", "COMPASS")) %dopar% {
 # 
 # COMPASS_orig(NS.orig[[i]], NU.orig[[i]], "SAMPLE ID",
-#              meta.orig[[i]], 20000, seeds.orig[[i]],
-#              paste0("/work/fwh6/COVID/out/200000/orig/",origpaths[i]), "orig")
+#              meta.orig[[i]], 40000, seeds.orig[[i]],
+#              paste0("/work/fwh6/COVID/out/40000/orig/",origpaths[i]), "orig")
 # 
 # }
 # 
 # stopCluster(cl) # stop the cluster
+```
+
+# Read In Results
+
+We read in the full runs for unlogged, logged, and PCA-transformed COMPASS-covariate (seed 47). These are saved in a named list of COMPASS-covariate objects.
+
+```{r full-data, options}
+
+full.Objs <- vector(mode="list", length=length(full.covpaths))
+  # read in full objects
+  for (i in 1:length(full.covpaths)) {
+    full.file <- list.files(paste0("/work/fwh6/COVID/out/40000/covar/",full.covpaths[i]),
+                            pattern="*.rds")
+    full.Objs[[i]] <- readRDS(paste0("/work/fwh6/COVID/out/40000/covar/",full.covpaths[i],"/",full.file))
+
+  }
+  
+full.OG <- readRDS("/work/fwh6/COVID/out/40000/orig/CD4/full/orig40000_seed47.rds")$COMPASSobj
+
+# transforming into COMPASS-like objects
+full.Objs <- lapply(1:3, function(i) COVtoCOMPASSObj(full.Objs[[i]], full.OG, full.covMatrices[[i]]))
+names(full.Objs) <- str_extract(full.covpaths,"(.*\\/.*)\\/.*\\/.*",group=1)
+```
+
+For regression, we read in the train-test sets:
+
+```{r cv-readin, options}
+CD4Objs_all_vars_log <- readInObjs("/work/fwh6/COVID/out/40000/covar/all_vars/log/CD4/",
+                      pattern="covar40000_seed.*")
+
+CD4Objs_all_vars_unlog <- readInObjs("/work/fwh6/COVID/out/40000/covar/all_vars/unlog/CD4/",
+                      pattern="covar40000_seed.*")
+
+CD4Objs_pca <- readInObjs("/work/fwh6/COVID/out/40000/covar/pca/log/CD4/",
+                      pattern="covar40000_seed.*")
+
+CD4Orig <- readInObjs("/work/fwh6/COVID/out/40000/orig/CD4/",
+                      pattern="orig40000_seed.*")
 ```
 
 # Results
@@ -480,9 +579,58 @@ We look at the following graphs:
 - Heatmaps 
 - Polyfunctional scores
 
+The objects created in the above sections and at the beginning of this section include
+
+- lists of training COMPASS and COMPASS-covar objects (CD4Orig, CD4Objs_all_vars_unlog, CD4Objs_all_vars_log, CD4Objs_pca)
+- lists of transformed train and test covariate matrices (CD4surfaceDFs.log, CD4surfaceDFs.unlog, CD4surfaceDFs.pca, CD4surfaceDFs.test.log, CD4surfaceDFs.test.unlog, CD4surfaceDFs.test.pca)
+- full meta information (CD4meta)
+
+## Full Dataset Results
+
+### Significant Gates
+
+We take the mean gamma estimated for each gate (COMPASS-covariate and COMPASS), then use univariate logistic regressions with hospitalization to determine gates which vary the most between hospitalized and nonhospitalizaed groups.
+
+The orderings appear to be the same across all full runs regardless of covariate transformation or use of covariates.
+TODO: some mean gammas differentiate perfectly.
+
+```{r important-gates, options}
+# dataframe (unlog covar) of mean gamma and outcome
+univar.reg.unlog <- full.Objs[[1]]$fit$mean_gamma %>%
+  cbind(full.Objs[[3]]$data$meta %>% 
+              select(Cohort) %>%
+              mutate(Cohort=(Cohort=="Hospitalized")*1))
+
+# univariate logistic regression
+univar.reg.unlog %>%
+  select(-Cohort) %>%
+  names() %>%
+  paste0('Cohort~0+',"`",.,"`")%>%
+  map_df(~tidy(glm(as.formula(.x), 
+               data= univar.reg.unlog, 
+               family="binomial"))) %>%
+  arrange(p.value) %>%
+  head(15) %>%
+  .$term
+
+full.OG$fit$mean_gamma %>%
+  cbind(full.OG$data$meta %>% 
+              select(Cohort) %>%
+              mutate(Cohort=(Cohort=="Hospitalized")*1)) %>%
+  select(-Cohort) %>%
+  names() %>%
+  paste0('Cohort~0+',"`",.,"`")%>%
+  map_df(~tidy(glm(as.formula(.x), 
+               data= univar.reg.unlog, 
+               family="binomial"))) %>%
+  arrange(p.value) %>%
+  head(15) %>%
+  .$term
+```
+
 ### Comparing to Original COMPASS results
 
-The original COMPASS results appear to match the COMPASS heatmap generated from the github object but is missing a few gates at 20000 iterations. The COMPASS-covariate object, even with 20000 runs, seems to add gates to be considered. In the training data, the resulting PFS scores seem more well-separated using COMPASS-covariate in comparison to original COMPASS.
+The original COMPASS results appear to match the COMPASS heatmap generated from the github object but is missing a few gates at 40000 iterations. The COMPASS-covariate object, even with 20000 runs, seems to add gates to be considered. In the training data, the resulting PFS scores seem more well-separated using COMPASS-covariate in comparison to original COMPASS.
 
 ```{r compare, options}
 
@@ -505,38 +653,36 @@ dev.off()
 # Original COMPASS run
 #--------------------------------------------------------
 
-CD4OrigCOMPASS_run <- readRDS("/work/fwh6/COVID/out/200000/orig/CD4/orig20000_seed1.rds")
+
+CD4OrigCOMPASS_run <- readRDS("/work/fwh6/COVID/out/40000/orig/CD4/full/orig40000_seed47.rds")
 
 rownames(CD4OrigCOMPASS_run$COMPASSobj$data$meta) <- CD4OrigCOMPASS_run$COMPASSobj$data$meta$`SAMPLE ID`
+
+png(file= paste0(parentDirectory,"2-Output/Original/COVID_CD4_OG_allvar_seed.png"),
+      width=500, height = 750)
 plot.COMPASSResult.ComplexHeatmap(CD4OrigCOMPASS_run$COMPASSobj, 
                                   row_annotation = "Cohort",
                                   row_annotation_colors = list("Non-hospitalized"=my_palette[11],
                                                                "Hospitalized" = my_palette[5]))
 
+dev.off()
+
 #--------------------------------------------------------
 # COMPASS-covariate run
 #--------------------------------------------------------
 
-CD4CovarCOMPASS_run <- readRDS("/work/fwh6/COVID/out/200000/covar/all_vars/unlog/CD4/covar20000_seed1.rds")
+CD4CovarCOMPASS_run <- readRDS("/work/fwh6/COVID/out/40000/covar/pca/log/CD4/full/covar40000_seed47.rds")
 
 # rownames(CD4CovarCOMPASS_run$COMPASScovarobj$data$meta) <- CD4OrigCOMPASS_run$COMPASSobj$data$meta$`SAMPLE ID`
 # return as fit-data list
 covarTest <- COVtoCOMPASSObj(CD4CovarCOMPASS_run, 
-                CD4OrigCOMPASS_run,
-                CD4surfaceMat)
+                CD4OrigCOMPASS_run$COMPASSobj,
+                CD4surfaceDFs.pca[[1]] %>% as.matrix())
 plot.COMPASSCovarResult.ComplexHeatmap(covarTest,
                                        row_annotation = "Cohort",
                                   row_annotation_colors = list("Non-hospitalized"=my_palette[11],
                                                                "Hospitalized" = my_palette[5]))
 
-#--------------------------------------------------------
-# PFS comparison
-#--------------------------------------------------------
-
-# testPFSDF <- getPFSDF(CD4OrigCOMPASS_run$COMPASSobj, covarTest)
-# testPFSDF %>%
-#   ggplot(aes(x=Cohort, y=PFS)) + geom_boxplot() +
-#   facet_wrap(.~COMPASS.Type)
 ```
 
 ### All-vars vs. PCA
@@ -547,40 +693,30 @@ We compare the following performance measures among runs using all-var unlogged 
 - Train boxplots of PFS score
 - Convergence statistics like Geweke's
 
-We first read in the CD4 COMPASS-covar and original objects in as lists.
 
 ```{r read-in-COMPASSobjs, options}
 
-CD4Objs_all_vars_log <- readInObjs("/work/fwh6/COVID/out/200000/covar/all_vars/log/CD4/",
-                      pattern="covar20000_seed.*")
 
-CD4Objs_all_vars_unlog <- readInObjs("/work/fwh6/COVID/out/200000/covar/all_vars/unlog/CD4/",
-                      pattern="covar20000_seed.*")
-
-CD4Objs_pca <- readInObjs("/work/fwh6/COVID/out/200000/covar/pca/log/CD4/",
-                      pattern="covar20000_seed.*")
-
-CD4Orig <- readInObjs("/work/fwh6/COVID/out/200000/orig/CD4/",
-                      pattern="orig20000_seed.*")
 
 #--------------------------------------------------------
 # Plot heatmaps
 #--------------------------------------------------------
 my_palette <- pal_igv("default", alpha=0.7)(15)
-for(i in 1:5) {plotHeatM(CD4Objs_all_vars_log[[i]], CD4Orig[[i]], CD4surfaceMat_log,
-          paste0(parentDirectory,"2-Output/All-Var-Log/COVID_CD4_log_allvar_seed", names(CD4Orig)[[i]],".png"),
-           "Cohort", list("Hospitalized"=my_palette[11],
-                                    "Non-hospitalized"=my_palette[12])) }
 
-for(i in 1:5) {plotHeatM(CD4Objs_all_vars_unlog[[i]], CD4Orig[[i]], CD4surfaceMat,
-          paste0(parentDirectory,"2-Output/All-Var-Unlog/COVID_CD4_unlog_allvar_seed", names(CD4Orig)[[i]],".png"),
+plotHeatM(full.Objs[[1]],
+          paste0(parentDirectory,"2-Output/All-Var-Unlog/COVID_CD4_unlog_allvar_seed.png"),
            "Cohort", list("Hospitalized"=my_palette[11],
-                                    "Non-hospitalized"=my_palette[12])) }
+                                    "Non-hospitalized"=my_palette[12])) 
 
-for(i in 1:5) {plotHeatM(CD4Objs_pca[[i]], CD4Orig[[i]], CD4surfaceMat_PCA,
-          paste0(parentDirectory,"2-Output/PCA/COVID_CD4_pca_seed", names(CD4Orig)[[i]],".png"),
+plotHeatM(full.Objs[[2]],
+          paste0(parentDirectory,"2-Output/All-Var-Log/COVID_CD4_log_allvar_seed.png"),
            "Cohort", list("Hospitalized"=my_palette[11],
-                                    "Non-hospitalized"=my_palette[12])) }
+                                    "Non-hospitalized"=my_palette[12])) 
+
+plotHeatM(full.Objs[[3]],
+          paste0(parentDirectory,"2-Output/PCA/COVID_CD4_pca_seed.png"),
+           "Cohort", list("Hospitalized"=my_palette[11],
+                                    "Non-hospitalized"=my_palette[12])) 
 
 #--------------------------------------------------------
 # Making covar output into COMPASSObj-like list
@@ -619,6 +755,18 @@ for(i in 1:5) {plotHeatM(CD4Objs_pca[[i]], CD4Orig[[i]], CD4surfaceMat_PCA,
 # 
 # wilcox.test(PFSdf %>% filter(Cohort=="Hospitalized", COMPASS.Type == "PFSOrig") %>% .$PFS, PFSdf %>% filter(Cohort=="Non-hospitalized", COMPASS.Type == "PFSOrig") %>% .$PFS)
 
+covarObjList <- full.Objs
+origObj <- full.OG
+covarNames <- c("Unlog", "Log", "PCA")
+covarMatList <- full.covMatrices
+
+
+aggPFS(origObj, covarObjList, covarNames, covarMatList) %>%
+  ggplot(aes(x=Type, y=PFS, color=Cohort)) + geom_boxplot()
+
+
+boxplotPFS(origObj, covarObjList, covarNames, covarMatList)
+
 ``` 
 
 
@@ -639,6 +787,32 @@ for(i in 1:5) {plotHeatM(CD4Objs_pca[[i]], CD4Orig[[i]], CD4surfaceMat_PCA,
 # dev.off()
 ```
 
+### PFS p-value
+
+```{r pfs-p, options}
+pfsDF.log <- aggPFS(origObj, covarObjList, covarNames, covarMatList) %>%
+  filter(Type=="Log") %>%
+  mutate(Cohort=(Cohort=="Hospitalized")*1)%>%
+  left_join(full.Objs[[1]]$data$meta %>% 
+              select(-Cohort) %>%
+              rename(ID=`SAMPLE ID`))
+
+pfsDF <- aggPFS(origObj, covarObjList, covarNames, covarMatList) %>%
+  filter(Type=="Original") %>%
+  mutate(Cohort=(Cohort=="Hospitalized")*1)%>%
+  left_join(full.Objs[[1]]$data$meta %>% 
+              select(-Cohort) %>%
+              rename(ID=`SAMPLE ID`))
+
+# regression to model hospitalization
+glm(Cohort ~ Age + Sex + PFS, data=pfsDF, family = "binomial")%>%
+  tidy()
+
+# wilcoxon comparing PFS for hosp vs. unhosp is different
+wilcox.test(pfsDF.log %>% filter(Cohort==1, COMPASS.Type == "PFSCovar") %>% .$PFS, pfsDF.log %>% filter(Cohort==0, COMPASS.Type == "PFSCovar") %>% .$PFS)
+wilcox.test(pfsDF %>% filter(Cohort==1, COMPASS.Type == "PFSOrig") %>% .$PFS, pfsDF %>% filter(Cohort==0, COMPASS.Type == "PFSOrig") %>% .$PFS)
+```
+
 ### Beta Heatmap
 
 We see which covariates are associated with various gates. 
@@ -653,6 +827,8 @@ We see which covariates are associated with various gates.
 
 ```
 
+
+## Regression Comparisons
 
 ### Convergence
 
@@ -669,85 +845,90 @@ We compare the acceptance rates of COMPASS vs. COMPASS-covariate. We plot the Ge
 #   ggtitle("Gamma Acceptance Rates")
 ```
 
-### Regression
+### LASSO
 
-We use a regression to predict the status (hospitalized vs. non-hospitalized) based on the PFS, sex, race, and age of a patient.
+We take the raw count matrices and calculate the log fold change for each gate for each patient. We then apply LASSO to these quantities in a regression.
+
+First, we calculate the log-fold change for each gate and individual, for each of the train datasets of interest. 
+TODO: LASSO doesn't like the lambda we give it sometimes (glmnet suggests not using a single lambda value). There are additionally 0's in the count matrices. I'm currently adding 1 to the denominator. Also, need to correct to be percentages not counts.
+
+```{r log-fold-change, options}
+NS.percent.full <- t(apply(CD4ns_final %>% as.matrix(), 1, function(row) row / sum(row) * 100))
+NU.percent.full <- t(apply(CD4nu_final %>% as.matrix(), 1, function(row) row / sum(row) * 100))
+LASSORegResults <- do.call(rbind,lapply(1:5, function(x) fold_resultGates(x, CD4Parts, CD4meta, NS.percent.full,
+                                                                    NU.percent.full, 
+                                                                    numCyt=7, ID="SAMPLE ID"))) 
+
+kable(LASSORegResults) %>%
+  kable_classic_2()
+
+#avgRegVals(PIRegResults, "PI")
+  
+```
+
+
+### Polyfunctional Index
+
+We use a polyfunctional index calculated from the frequency of cells performing $i$ functions. We first sum up the stimulated count matrix columns to aggregate cells by number of functions they perform, then calculate the percentage.
+
+Once we have the percentage matrix, we feed it into the Polyfunctionality index formula.
+
+We then aggregate these PI scores to meta information and run a regression.
+
+
+We then get the ROC associated with the PI for the test and train data.
+
+```{r pi-roc, options}
+numCyt <- 7
+PI.scores <- lapply(1:5, function(i) meta.orig[[i]] %>%
+                      cbind(PIScore=apply(Percent.Matrix(NS.orig[[i]], numCyt), 1, function(row) PI.Score(row, numCyt, 5))))
+
+PIRegResults <- do.call(rbind,lapply(1:5, function(x) fold_resultPI(x, CD4Parts, CD4meta, CD4ns_final,
+                                                                    CD4surfaceDFs.log[[x]], CD4surfaceDFs.test.log[[x]],
+                                                                    numCyt, q=1, ID="SAMPLE ID"))) 
+
+kable(PIRegResults) %>%
+  kable_classic_2()
+
+avgRegVals(PIRegResults, "PI")
+```
+
+```{r reg-PI, options}
+PI.scores[[1]] %>%
+  ggplot(aes(x=Cohort, y=PIScore)) + geom_boxplot()
+
+# regPI <- glm(Cohort ~ . -Cohort -`SAMPLE ID` , family = "binomial",
+#     data=PI.scores[[5]] %>% mutate(Cohort=(Cohort=="Hospitalized")*1) %>%
+#       select(`SAMPLE ID`, Cohort, PIScore) %>%
+#       left_join(CD4surfaceDFs.log[[5]] %>% rownames_to_column(var="SAMPLE ID")))
+# 
+# 
+# summary(regPI)
+
+wilcox.test(PI.scores[[1]] %>% filter(Cohort=="Hospitalized") %>% .$PIScore, pfsDF.log %>% filter(Cohort=="Non-hospitalized") %>% .$PIScore)
+```
+
+### PFS Regression
+
+#### Using Mean Gamma estimated from Covariates
+
+We use a regression to predict the status (hospitalized vs. non-hospitalized) based on the PFS of a patient.
 
 To test each fold's ability to estimate PFS/FS for each test patient, we 
 1. We pull beta samples from the train beta posterior for each of the test samples. 
 2. We predict gamma by multiplying Luminex level by the beta sample coefficient (and adding beta sample intercept), then taking inverse logit.
 2. We use gamma to calculate estimated PFS and FS for test.
 
-#### Sampling Beta
 
 We sample entire beta matrices and calculate the mean beta matrix. We then multiply by the covariate test matrix and inverse-logit to get the mean gamma matrix for the test patients. The mean gamma matrix is used to find the estimated PFS for each patient.
-
-```{r regression, options}
-#--------------------------------------------------------
-# Making covar output into COMPASSObj-like list
-#--------------------------------------------------------
-# folds need to be ordered by first seed digit: 1, 100, 3, 47, 99
-# seeds were done in order initially: 1, 47, 100, 99, 3
-foldsIdxnew <- sapply(names(CD4Orig), as.numeric)
-foldsCD4new <- foldsCD4[c(1, 3, 5, 2, 4)]
-# origTest <- CD4Orig[[1]]$COMPASSobj
-# covarTest <- COVtoCOMPASSObj(CD4Objs_all_vars_log[[1]], CD4Orig[[1]], CD4surfaceMat_log)
-# 
-# # get test meta DF plus PFS
-# testMetaObj <- testMetawPFS(foldsCD4,1, CD4meta, CD4surfaceMat_log, covarTest, "SAMPLE ID")
-# 
-# testMetaObj
-```
-
-
-#### Train Regression
-
 We train regressions on the original and covariate datasets.
-
-```{r label, options}
-# origTestCovs <- origTest$data$meta %>%
-#   inner_join(PFSDForigTest %>% rename("SAMPLE ID"=ID)) %>%
-#   select(Cohort, Age, Sex, PFS) %>%
-#   mutate(Cohort_Bin = if_else(Cohort=="Hospitalized", 1, 0))
-# 
-# origTestMod <- glm(Cohort_Bin~ PFS,
-#     data=origTestCovs,
-#     family="binomial")
-# 
-# summary(origTestMod)
-
-# covarTestCovs <- covarTest$data$meta %>%
-#   select(Cohort, Age, Sex, PFS) %>%
-#   mutate(Cohort_Bin = if_else(Cohort=="Hospitalized", 1, 0))
-# 
-# covarTestMod <- glm(Cohort_Bin~ Age + Sex + PFS,
-#     data=covarTestCovs,
-#     family="binomial")
-# 
-# summary(covarTestMod)
-# trainMod <- getTrainReg(foldsCD4new, 1, CD4meta, CD4surfaceMat, covarTest,"SAMPLE ID")
-# summary(trainMod)
-# testProbs <- getResponseProbs("test",foldsCD4new, 1, CD4meta, CD4surfaceMat, covarTest,"SAMPLE ID")
-# trainProbs <- getResponseProbs("train",foldsCD4new, 1, CD4meta, CD4surfaceMat, covarTest,"SAMPLE ID")
-```
-
-#### Test Regression
 
 Since we have around 10 hospitalized and 20 hospitalized patients in each training set, we stick to only including PFS in a logistic regression with infection. The train-test regression results are below for all-vars logged, all-vars unlogged, and PCA respectively. PCA appears to have the best test AUC.
 
 ```{r test-reg, options}
-# origTestPreds <- predict(origTestMod, newdata=testMeta, type="response")
-# roc(testMeta %>% mutate(Cohort_Bin=(Cohort=="Hospitalized")*1) %>% .$Cohort_Bin, origTestPreds)
 
-# get ROC
-# getROCs(setdiff(1:nrow(CD4meta), foldsCD4[[1]]), CD4meta, testProbs)$auc
-# getROCs(foldsCD4[[1]], CD4meta, trainProbs)$auc
 
-# can't use 5th since all nonhospitalized
-# fold_result(5, foldsCD4new, CD4Orig, CD4Objs_all_vars_log, rep(list(CD4surfaceMat_log),5),
-#             rep(list(CD4meta),5))
-
-logRegResults <- do.call(rbind,lapply(1:4, function(x) fold_result(x, foldsCD4new, CD4Orig, CD4Objs_all_vars_log, rep(list(CD4surfaceMat_log),5),
+logRegResults <- do.call(rbind,lapply(1:5, function(x) fold_result(x, CD4Parts, CD4Orig, CD4Objs_all_vars_log,                                               CD4surfaceDFs.log, CD4surfaceDFs.test.log,
             rep(list(CD4meta),5)))) 
 
 avgRegVals(logRegResults, "Logged All-Var")
@@ -755,7 +936,7 @@ avgRegVals(logRegResults, "Logged All-Var")
 kable(logRegResults) %>%
   kable_classic_2()
 
-unlogRegResults <- do.call(rbind,lapply(1:4, function(x) fold_result(x, foldsCD4new, CD4Orig, CD4Objs_all_vars_unlog, rep(list(CD4surfaceMat),5),
+unlogRegResults <- do.call(rbind,lapply(1:5, function(x) fold_result(x, CD4Parts, CD4Orig, CD4Objs_all_vars_unlog,                                                   CD4surfaceDFs.unlog, CD4surfaceDFs.test.unlog,
             rep(list(CD4meta),5))))
 
 avgRegVals(unlogRegResults, "Unlogged All-Var")
@@ -764,11 +945,159 @@ kable(unlogRegResults) %>%
   kable_classic_2()
 
 
-PCARegResults <- do.call(rbind,lapply(1:4, function(x) fold_result(x, foldsCD4new, CD4Orig, CD4Objs_pca, rep(list(CD4surfaceMat_PCA),5),
+PCARegResults <- do.call(rbind,lapply(1:5, function(x) fold_result(x, CD4Parts, CD4Orig, CD4Objs_pca,
+                                      CD4surfaceDFs.pca, CD4surfaceDFs.test.pca,
             rep(list(CD4meta),5))))
 
 avgRegVals(PCARegResults, "Logged PCA")
 
 kable(PCARegResults) %>%
   kable_classic_2()
+```
+
+
+#### Running COMPASS-covar on the test flow data
+
+In the above regression, we are not incorporating test flow data at all; this makes for an unfair comparison with the PI and LASSO methods. We now try to run COMPASS-covar on the test data to get the PFS, and use the beta coefficients relating PFS  to hospitalization learned from the training data.
+
+```{r test-COMPASS-covar, options}
+# categories
+CAT <- rep(list(getCats(CD4ns_final)), 15)
+
+# Ns and Nu for each simulation
+NS.test <- c(foldedNs(type="test", 1, 3), foldedNs(type="test", 2, 3), foldedNs(type="test", 3, 3), foldedNs(type="test", 4,3 ), foldedNs(type="test", 5,3))
+NU.test <- c(foldedNu(type="test", 1,3), foldedNu(type="test", 2,3), foldedNu(type="test", 3,3), foldedNu(type="test", 4,3), foldedNu(type="test", 5,3))
+
+# seeds for each simulation
+seeds <- c(rep(1,3), rep(2,3), rep(3,3), rep(4,3), rep(5,3))
+
+# covariate matrix for each simulation
+covMatrices.test <- do.call(c, 
+        lapply(1:5,
+               function(i) list(CD4surfaceDFs.test.unlog[[i]], CD4surfaceDFs.test.log[[i]], CD4surfaceDFs.test.pca[[i]]))) 
+
+# save paths for each simulation
+covpaths.test <- rep(c("all_vars/unlog/CD4/test", "all_vars/log/CD4/test", "pca/log/CD4/test"),5)
+```
+
+
+```{r compass-covariate-run, options}
+
+
+
+# cl <- makeCluster(15) # create a cluster with 5 workers
+# registerDoParallel(cl) # register the cluster for parallel computation
+# 
+# results <- foreach(i = 1:15, .packages = c("dplyr", "COMPASS")) %dopar% {
+# 
+# 
+#   COMPASS_covar(NS.test[[i]],
+#                 NU.test[[i]], covMatrices.test[[i]] %>% as.matrix(),
+#                 CAT[[i]],
+#                 iter=40000, seed=seeds[i],
+#                 paste0("/work/fwh6/COVID/out/40000/covar/",covpaths.test[i]),
+#                 "covarTest")
+# }
+# 
+# stopCluster(cl) # stop the cluster
+
+```
+
+
+We do the same with COMPASS.
+
+```{r compass-orig-setup-test, options}
+NS.orig <- c(foldedNs(type="test", 1, 1), foldedNs(type="test", 2, 1), foldedNs(type="test", 3, 1), foldedNs(type="test", 4,1), foldedNs(type="test", 5,1))
+NU.orig <- c(foldedNu(type="test", 1,1), foldedNu(type="test", 2,1), foldedNu(type="test", 3,1), foldedNu(type="test", 4,1), foldedNu(type="test", 5,1))
+meta.orig <-c(foldedMeta(type="test", 1,1), foldedMeta(type="test", 2,1), foldedMeta(type="test", 3,1), foldedMeta(type="test", 4,1), foldedMeta(type="test", 5,1))
+seeds.orig <- c(rep(1,1), rep(2,1), rep(3,1), rep(4,1), rep(5,1))
+origpaths <- rep(c("CD4/test/"), 5)
+```
+
+```{r compass-orig, options}
+
+# cl <- makeCluster(5) # create a cluster with 5 workers
+# registerDoParallel(cl) # register the cluster for parallel computation
+# 
+# results <- foreach(i = 1:5, .packages = c("dplyr", "COMPASS")) %dopar% {
+# 
+# COMPASS_orig(NS.orig[[i]], NU.orig[[i]], "SAMPLE ID",
+#              meta.orig[[i]], 40000, seeds.orig[[i]],
+#              paste0("/work/fwh6/COVID/out/40000/orig/",origpaths[i]), "origTest")
+# 
+# }
+# 
+# stopCluster(cl) # stop the cluster
+```
+
+```{r read-in-test, options}
+CD4Objs_all_vars_log.test <- readInObjs("/work/fwh6/COVID/out/40000/covar/all_vars/log/CD4/test/",
+                      pattern="covarTest40000_seed.*")
+
+CD4Objs_all_vars_unlog.test <- readInObjs("/work/fwh6/COVID/out/40000/covar/all_vars/unlog/CD4/test/",
+                      pattern="covarTest40000_seed.*")
+
+CD4Objs_pca.test <- readInObjs("/work/fwh6/COVID/out/40000/covar/pca/log/CD4/test/",
+                      pattern="covarTest40000_seed.*")
+
+CD4Orig.test <- readInObjs("/work/fwh6/COVID/out/40000/orig/CD4/test/",
+                      pattern="origTest40000_seed.*")
+```
+
+Once we have the test COMPASS-covar objects, we calculate the PFS.
+
+```{r regression, options}
+testFlowOGROC <- function(foldNum) {
+testObj <- CD4Orig.test[[foldNum]]$COMPASSobj
+trainObj <- CD4Orig[[foldNum]]$COMPASSobj
+
+  testDat <- getPFSDF(testObj) %>% mutate(Cohort_Bin=(Cohort=="Hospitalized")*1)
+  trainDat <- getPFSDF(trainObj) %>% mutate(Cohort_Bin=(Cohort=="Hospitalized")*1)
+  
+  trainMod1 <- glm(Cohort_Bin ~ PFS, data=trainDat, family = "binomial")
+  
+  Preds <- predict(trainMod1, newdata=testDat, type = "response")
+  PredsTrain <- predict(trainMod1, type="response")
+  
+  trainROC<-getROCs(CD4Parts[[foldNum]], CD4meta, PredsTrain)$auc
+  testROC <-getROCs(setdiff(1:nrow(CD4meta),CD4Parts[[foldNum]]), CD4meta, Preds)$auc
+  
+  return(data.frame(i=foldNum, 
+                    testROC = testROC,
+                    trainROC=trainROC))
+
+}
+
+
+testFlowROC <- function(foldNum) {
+  testOGObj <- CD4Orig.test[[foldNum]]$COMPASSobj
+  testObj <- COVtoCOMPASSObj(CD4Objs_all_vars_log.test[[foldNum]], testOGObj, CD4surfaceDFs.test.log[[foldNum]])  
+  
+  trainObj <- COVtoCOMPASSObj(CD4Objs_all_vars_log[[foldNum]], CD4Orig[[foldNum]]$COMPASSobj, CD4surfaceDFs.log[[foldNum]])
+  testDat <- getPFSDF(testObj) %>% mutate(Cohort_Bin=(Cohort=="Hospitalized")*1)
+  
+  trainMod1 <- getTrainReg(CD4Parts, foldNum, CD4meta, CD4surfaceDF.full.log, trainObj, "SAMPLE ID")
+  
+  Preds <- predict(trainMod1, newdata=testDat, type = "response")
+  PredsTrain <- predict(trainMod1, type="response")
+  
+  trainROC<-getROCs(CD4Parts[[foldNum]], CD4meta, PredsTrain)$auc
+  testROC <-getROCs(setdiff(1:nrow(CD4meta),CD4Parts[[foldNum]]), CD4meta, Preds)$auc
+  
+  return(data.frame(i=foldNum, 
+                    testROC = testROC,
+                    trainROC=trainROC))
+
+}
+
+logRegResults <- do.call(rbind,lapply(1:5, function(x) testFlowROC(x))) 
+
+logRegResults %>% kable() %>%
+  kable_classic_2()
+
+OGRegResults <- do.call(rbind,lapply(1:5, function(x) testFlowOGROC(x))) 
+
+OGRegResults %>% kable() %>%
+  kable_classic_2()
+
 ```
