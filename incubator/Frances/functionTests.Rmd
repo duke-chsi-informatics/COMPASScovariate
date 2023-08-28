@@ -1,0 +1,235 @@
+---
+title: "Testing Functions"
+output: html_document
+date: "2023-08-23"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(lubridate)
+library(kableExtra)
+library(survival)
+library(devtools)
+library(readxl)
+library(ggpubr)
+library(pROC)
+library(data.table)
+library(Rcpp)
+library(caret)
+library(coda)
+library(superheat)
+library(doParallel)
+library(DT)
+library(COMPASS)
+library(tidyverse)
+source("helperscripts.R")
+```
+
+
+## Read-In
+
+We read in the original, log train, and log test objects from the COVID dataset. We need to do a temporary fix of adding X to the covariate COMPASS objects and adding data from the COMPASS object to the corresponding COMPASS-cov object. We will put this into a function `COVtoCOMPASSObj`.
+
+```{r pressure, echo=FALSE}
+
+CD4Orig <- readInObjs("/work/fwh6/COVID/out/40000/orig/CD4/",
+                      pattern="orig40000_seed.*")
+
+CD4Objs_all_vars_log <- readInObjs("/work/fwh6/COVID/out/40000/covar/all_vars/log/CD4/",
+                      pattern="covar40000_seed.*")
+
+CD4Objs_all_vars_log.test <- readInObjs("/work/fwh6/COVID/out/40000/covar/all_vars/log/CD4/test/",
+                      pattern="covarTest40000_seed.*")
+
+CD4Orig.test <- readInObjs("/work/fwh6/COVID/out/40000/orig/CD4/test/",
+                      pattern="origTest40000_seed.*")
+
+#CD4surfaceDFs.log
+
+```
+
+We also test the RV144 dataset.
+
+```{r rv144-read-in, options}
+RV144Orig <- readInObjs("/work/fwh6/RV144/SplitRuns/trainDat/",
+                      pattern=".*rv144COMPASSorig40000.*")
+
+RV144Objs_covariates <- readInObjs("/work/fwh6/RV144/SplitRuns/trainDat/",
+                      pattern=".*rv144COMPASScovar40000.*")
+
+# RV144Objs_all_vars_log.test <- readInObjs("/work/fwh6/COVID/out/40000/covar/all_vars/log/CD4/test/",
+#                       pattern="covarTest40000_seed.*")
+# 
+# RV144Orig.test <- readInObjs("/work/fwh6/COVID/out/40000/orig/CD4/test/",
+#                       pattern="origTest40000_seed.*")
+
+RV144Lum <- antibodyDF_transf %>% 
+  select(-c(PTID)) %>% as.matrix() %>%
+  
+```
+
+### Check that PTIDs are Same Across Objs, Cov Mat
+
+```{r check-dims, options}
+# yes
+all(CD4surfaceDFs.log[[1]] %>% rownames() == rownames(CD4Objs_all_vars_log[[1]]$COMPASScovarobj$mean_gamma))
+all(CD4surfaceDFs.log[[1]] %>% rownames() == rownames(CD4Orig[[1]]$COMPASSobj$data$meta$`SAMPLE ID`))
+
+trainOrigObj <- CD4Orig[[1]]
+trainCovMat <- CD4surfaceDFs.log[[1]]
+testCovMat <- CD4surfaceDFs.test.log[[1]] 
+trainCovarObj <- CD4Objs_all_vars_log[[1]]
+# the below is made from running COMPASS-covar on test data; we'll use this for testing purposes only
+# in real life, if using prediction method using only covariates, we'll have to create the below to have a COMPASS or COMPASScov obj structure, but most fields will be blank or filled with placeholders
+testOrigObj <- CD4Orig.test[[1]]
+testCovarObj <- CD4Objs_all_vars_log.test[[1]]
+```
+
+### COVtoCOMPASSObj
+
+We added the covariate matrix to the COMPASScovar object and tested below.
+
+```{r covtocompassobj, options}
+newTrainCovarObj <- COVtoCOMPASSObj(RV144Objs_covariates, trainOrigObj$COMPASSobj, trainCovMat)
+newTestCovarObj <- COVtoCOMPASSObj(RV144Objs_covariates, testOrigObj$COMPASSobj, testCovMat)
+newTrainOrigObj <- trainOrigObj$COMPASSobj
+newTestOrigObj <- testOrigObj$COMPASSobj
+# For testing directly in function
+# covarObj <- trainCovarObj
+# origObj <- trainOrigObj$COMPASSobj
+# covMat <- trainCovMat
+
+# Check 
+all(newTrainCovarObj$fit$mean_gamma %>% rownames() == rownames(newTrainCovarObj$data$X %>% rownames()))
+all(newTrainCovarObj$fit$beta %>% colnames() == c("Intercept",newTrainCovarObj$data$X %>% colnames()))
+
+all(newTestCovarObj$fit$mean_gamma %>% rownames() == rownames(newTestCovarObj$data$X %>% rownames()))
+all(newTestCovarObj$fit$beta %>% colnames() == c("Intercept",newTestCovarObj$data$X %>% colnames()))
+```
+We do the same for the RV144 COMPASScovar objects
+
+```{r covtocompassObjRV144, options}
+newRV144TrainCovarObj <- COVtoCOMPASSObj(trainCovarObj, RV144Orig$COMPASSobj, trainCovMat)
+#newTestCovarObj <- COVtoCOMPASSObj(testCovarObj, testOrigObj$COMPASSobj, testCovMat)
+newRV144TrainOrigObj <- RV144Orig$COMPASSobj
+#newTestOrigObj <- testOrigObj$COMPASSobj
+# For testing directly in function
+# covarObj <- trainCovarObj
+# origObj <- trainOrigObj$COMPASSobj
+# covMat <- trainCovMat
+
+# Check 
+all(newTrainCovarObj$fit$mean_gamma %>% rownames() == rownames(newTrainCovarObj$data$X %>% rownames()))
+all(newTrainCovarObj$fit$beta %>% colnames() == c("Intercept",newTrainCovarObj$data$X %>% colnames()))
+
+all(newTestCovarObj$fit$mean_gamma %>% rownames() == rownames(newTestCovarObj$data$X %>% rownames()))
+all(newTestCovarObj$fit$beta %>% colnames() == c("Intercept",newTestCovarObj$data$X %>% colnames()))
+```
+
+### Get PFS/FS and Aggregate with Meta/X
+
+We create a general function `getPFSMetaDF` that calculates PFS/FS and aggregates with meta information and X. It takes in only the COMPASS or COMPASSCov object.
+
+```{r trainPFSdf, options}
+trainPFSdf <- getPFSMetaDF(newTrainCovarObj)
+trainPFSOrigDF <- getPFSMetaDF(trainOrigObj$COMPASSobj)
+# Obj <- newTrainCovarObj
+
+#Check
+all(rownames(trainPFSdf)==rownames(trainPFSOrigDF))
+```
+
+### Get Predicted Mean Gamma
+
+We create a general function `getPredTestGamma` that calculates predicted mean gamma, replaces the mean gamma in the parameter COMPASSCov object and returns the object. This ensures that we can keep track of the meta and covariate information as well.
+
+Note that we have to add a column of filler numbers as the null gate column in mean gamma for the PFS/FS to be calculated. However, the exact values don't matter because they will multiplied by degree 0 anyways.
+
+```{r trainPFSdf, options}
+oneIterPredCovarObj<- getPredGamma(newTestCovarObj, newTrainCovarObj$fit$beta[,,1])
+# Obj <- newTrainCovarObj
+# betaDF <- newTrainCovarObj$fit$beta[,,1]
+
+# Check
+all(rownames(oneIterPredCovarObj$fit$mean_gamma) == newTestCovarObj$data$meta$`SAMPLE ID`)
+dim(oneIterPredCovarObj$fit$mean_gamm)
+dim(newTestCovarObj$fit$mean_gamma)
+PolyfunctionalityScore.COMPASSResult(oneIterPredCovarObj)
+```
+
+### Overall Function for Regression Out (COMPASS-cov run on both train and test)
+
+Inputs: Train and Test COMPASScovar and COMPASS objects, column names of regression covariates and the binary indicator for cohort, whether LASSO or GLM should be used. For the train and test objects, we need to remove all placebo members of the cohort. The following happens in the function:
+
+1. Calculate PFS/FS and aggregate with meta and covariates (both train and test) using `getPFSMetaDF`.
+2. Pass the above matrix from train into a GLM or LASSO to model cohort membership.
+3. Use the model above to predict the cohort membership for train and test.
+4. Calculate ROC of preds vs. actual membership.
+
+```{r general-w-test-train-objs, options}
+covarNamesCov=c("PFSCovar", "Age")
+covarNamesOrig = c("PFSOrig", "Age")
+cohortName = "Cohort"
+cohortPosVal = "Hospitalized"
+
+rocs_Calc <- function(newTrainCovarObj, newTestCovarObj, newTrainOrigObj, newTestOrigObj, covarNamesCov, covarNamesOrig, cohortName, cohortPosVal, model="glm") {
+  # calculate PFS/FS and append to meta/cov information for all objects
+  trainCovarX <- getPFSMetaDF(newTrainCovarObj)[,c(covarNamesCov)] 
+  testCovarX <- getPFSMetaDF(newTestCovarObj)[,c(covarNamesCov)]
+  trainOrigX <- getPFSMetaDF(newTrainOrigObj)[,c(covarNamesOrig)]
+  testOrigX <- getPFSMetaDF(newTestOrigObj)[,c(covarNamesOrig)]
+  
+  # use the train matrices to make GLM or LASS0 models for the cohort membership
+  trainY <-data.frame(Y=(newTrainCovarObj$data$meta[,cohortName]==cohortPosVal)*1)
+  testY <-data.frame(Y=(newTestCovarObj$data$meta[,cohortName]==cohortPosVal)*1)
+  
+  if(model=="glm") {
+   trainCovarMod <- glm(Y ~ ., data=data.frame(trainY, trainCovarX), family="binomial")  # covariate
+   trainOrigMod <- glm(Y ~ .,  data=data.frame(trainY, trainOrigX), family="binomial")    # original
+  }
+  else if (model=="lasso") {
+    cvCovfit <- cv.glmnet(as.matrix(trainCovarX), as.matrix(trainY), 
+                          family = "binomial", type.measure = "class")
+    trainCovarMod <- glmnet(x=as.matrix(trainCovarX),                        # covariate
+                     y=as.matrix(trainY),
+                     family = "binomial",
+                     lambda=cvCovfit$lambda.min)
+    
+    cvOGfit <- cv.glmnet(as.matrix(trainOrigX), as.matrix(trainY), family = "binomial", type.measure = "class")
+    trainOrigMod <- glmnet(x=as.matrix(trainOrigX),                         # original
+                     y=as.matrix(trainY),
+                     family = "binomial",
+                     lambda=cvOGfit$lambda.min)
+  }
+  
+  # predict the membership of train and test datasets
+  if (model=="glm") {
+    trainCovPreds <- predict(trainCovarMod, type="response")
+    testCovPreds <- predict(trainCovarMod, newdata=data.frame(Y=testY,testCovarX), type="response")
+    
+    trainOrigPreds <- predict(trainOrigMod, type="response")
+    testOrigPreds <- predict(trainOrigMod, newdata=data.frame(Y=testY,testOrigX), type="response")
+  }
+  else if(model=="lasso") {
+    trainCovPreds <- predict(trainCovarMod, newx=as.matrix(trainCovarX), type="response")
+    testCovPreds <- predict(trainCovarMod, newx=as.matrix(testCovarX), type="response")
+    
+    trainOrigPreds <- predict(trainOrigMod, newx=as.matrix(trainOrigX),type="response")
+    testOrigPreds <- predict(trainOrigMod, newx=as.matrix(testOrigX), type="response")
+  }
+  
+  # get ROCs
+  testOrigROC <- roc(testY$Y, as.vector(testOrigPreds))
+  trainOrigROC <- roc(trainY$Y, as.vector(trainOrigPreds))
+  testCovROC <- roc(testY$Y, as.vector(testCovPreds))
+  trainCovROC <- roc(trainY$Y, as.vector(trainCovPreds))
+  
+   return(list(covariate_model = trainCovarMod, original_model=trainOrigMod,
+               testOrigROC = testOrigROC, trainOrigROC=trainOrigROC,
+               testCovROC = testCovROC, trainCovROC = trainCovROC))
+  
+}
+
+# test on RV144
+rocs_Calc(newTrainCovarObj, newTestCovarObj, newTrainOrigObj, newTestOrigObj, covarNamesCov, covarNamesOrig, cohortName, cohortPosVal, model="glm")
+```
