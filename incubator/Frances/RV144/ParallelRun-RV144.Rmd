@@ -1,0 +1,627 @@
+---
+title: "Including Antibody Covariates in RV144"
+
+author:
+
+                - "Frances Hung"
+
+                - "Biostatistics, Epidemiology and Research Design (BERD) Core"
+
+                - "Center for Human Systems Immunology (CHSI)"
+
+date: "`r  Sys.Date()`"
+
+output:
+
+  html_document:
+
+    toc: true
+
+    toc_float: true
+
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE,message = FALSE)
+options(knitr.duplicate.label = 'allow')
+
+```
+
+```{r Baseinfo,eval=FALSE}
+
+#General info ----------------------
+
+#
+
+# Created: 2023-04-29
+
+#
+
+# Author: Frances Hung
+
+#
+
+# Program: /CHSI/PackageDev/COMPASScovariate/incubator/Frances/RV144
+
+#
+
+# Description: Split RV144 into 5 test-train sets, then run COMPASS and COMPASS-covariate on each. 
+
+# Test predictive capability of PFS in multiple ways, and compare to predictive capability of PI
+
+#--- --- --- --- --- --- --- --- --- --- --- --- ---
+
+#--- --- --- --- --- --- --- --- --- --- --- --- ---
+
+```
+
+```{r libs,message=FALSE, warning=FALSE, include=F, results='asis'}
+
+
+
+library(lubridate)
+library(kableExtra)
+library(survival)
+library(devtools)
+library(readxl)
+library(ggpubr)
+library(pROC)
+library(data.table)
+library(Rcpp)
+library(caret)
+library(coda)
+library(superheat)
+library(doParallel)
+library(DT)
+library(glmnet)
+library(COMPASS)
+library(tidyverse)
+
+
+# the RDATA file provided by Lynn containing original paper's COMPASS object. https://zenodo.org/record/46009#.Y73dWuzMJaQ
+load(file="/work/fwh6/RV144/rv144-2023-02-09.rda")
+
+# get placebo indices and remove
+placebo_idx <- which(rv144$data$meta$infect=="PLACEBO")
+
+# meta-information minus placebos
+meta <- rv144$data$meta %>%
+  select(-c(PFS, FS)) %>%
+  arrange(PTID) %>%
+  .[setdiff(1:nrow(rv144$data$meta),placebo_idx),]
+
+ # unstim counts minus placebos
+nU <- rv144$data$n_u %>% as.data.frame() %>%
+  rownames_to_column(var="PTID") %>%
+  arrange(PTID) %>%
+  `rownames<-`(.$PTID) %>%
+  select(-PTID) %>%
+  .[setdiff(1:nrow(rv144$data$meta),placebo_idx),]
+
+# stim counts minus placebos
+nS <- rv144$data$n_s %>% as.data.frame() %>%
+  rownames_to_column(var="PTID") %>%
+  arrange(PTID) %>%
+  `rownames<-`(.$PTID) %>%
+  select(-PTID) %>%
+  .[setdiff(1:nrow(rv144$data$meta),placebo_idx),]
+
+
+# aggregate nS and nU into one flow matrix
+flow_agg <- nU %>% mutate(Stimulation="noStim") %>%
+  rownames_to_column(var="PTID") %>%
+  rbind(nS %>% mutate(Stimulation="Stim") %>%
+  rownames_to_column(var="PTID"))  %>%
+  arrange(PTID)
+
+# Luminex data arranged by PTID
+antibodyDF <- meta %>%
+  arrange(PTID) %>%
+  select(PTID, Luminex)
+
+
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# Reading in since COMPASS package is loaded; the below are add-ons for COMPASS-covar
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+source("~/CHSI/PackageDev/COMPASScovariate/R/COMPASS-covariate.R")
+source("~/CHSI/PackageDev/COMPASScovariate/R/updatebeta.R")
+source("~/CHSI/PackageDev/COMPASScovariate/R/utils.R")
+source("~/CHSI/PackageDev/COMPASScovariate/R/Scores.R")
+
+# functions for analysis after creating COMPASS objects
+source("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/helperscripts.R")
+source("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/PI-helperscripts.R")
+
+
+
+```
+
+# Introduction
+
+We consider `r nrow(meta)` RV144 patients:
+
+- Sex (sex: 0 or 1)
+- Risk (risk.medium, risk.high)
+- Age (age: Age <=20, Age >=26, Age 21-25)
+- IgAprim (the binding of plasma IgA antibodies to Env)
+- V2prim (the binding of IgG antibodies to variable region 2 (V2) of the gp120 Env)
+- Vaccine (vaccine: PLACEBO or VACCINE)
+- Stratum number (based on sex, # vaccines received out of 4) from https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3371689/)
+
+In the original COMPASS paper, PFS and FS scores were used as covariates in logistic and Cox-PH models, along with sex, risk groups, and 5 other primary variables. The original RV144 paper finds that IgA binding and V2 binding are directly and inversely correlated with infection.
+
+When we run COMPASS-covar, we only use Luminex as a covariate in order to potentially improve PFS score estimates. We don't cut gates for now because all of the gates pass the sparsity condition.
+
+The raw flow data (nU and nS concatenated) is `flow\_agg` and covariate data is `antibodyDF`.
+
+
+## Logging/Scaling Antibody Measures
+
+We log-scale Luminex because it ranges from 0-1. The below histogram  shows the untransformed covariates and the violin plot shows the covariates after scaling the logged Luminex (if Luminex = 0, then we take log(Luminex + 0.001)). 
+
+TODO: Maybe we should consider another transformation: https://stats.stackexchange.com/questions/195293/what-is-the-most-appropriate-way-to-transform-proportions-when-they-are-an-indep
+
+Either way, we save as `antibodyDF_transf`.
+
+
+```{r ex-scale-log, options}
+
+antibodyDF %>%
+  pivot_longer(cols = -c(PTID), names_to = "Vars", values_to = "values") %>%
+  drop_na() %>%
+  ggplot(aes(x= values)) + 
+  geom_histogram() + facet_wrap(.~Vars, scales = "free") +
+  ggtitle("Antibody Measures") +
+  xlab("Value")
+
+antibodyDF_transf <- antibodyDF %>%
+  mutate(Luminex = scale(log(Luminex + 0.001)))
+
+X <- antibodyDF_transf %>%
+  `rownames<-`(.$PTID) %>%
+  select(-PTID) %>% as.matrix()
+
+#checking log and scale work correctly
+# antibodyDF_transf %>%
+#   summarize(across(-PTID, ~mean(.x, na.rm = TRUE)))
+# 
+# antibodyDF_transf %>%
+#   summarize(across(-PTID, ~sd(.x, na.rm = TRUE)))
+
+
+```
+
+
+Below is a closer look at the transformed antibody measures for the `r nrow(antibodyDF_transf)` patients in question. The antibody measures are colored by whether an event (HIV infection) occurred or not. We have `r antibodyDF_transf %>% inner_join(meta %>% select(PTID, infect)) %>% filter(!str_detect(toupper(infect), "NON")) %>% nrow()` patients who are infected out of `r nrow(antibodyDF_transf)`.
+
+```{r ex-scale-log-Aim2, options}
+antibodyDF_transf %>%
+  inner_join(meta %>% select(PTID, infect)) %>%
+  pivot_longer(cols = -c(PTID, infect), names_to = "Vars", values_to = "values") %>%
+  drop_na() %>%
+  mutate(event=as.factor(infect)) %>%
+  dplyr::rename(Infection=event) %>%
+  ggplot(aes(x= Infection, y = values, color = Infection)) + 
+  geom_violin() + facet_wrap(.~Vars, scales = "free") +
+  xlab("Infection")
+
+```
+
+
+We look at the placebo flow differences to see if they could potentially drastically change our results:
+
+
+```{r compass-funcs, options}
+
+#------------------------------------------------------
+# FUNCTION for getting categories matrix for flow counts
+# @params: flow DF
+# @output: category matrix
+#------------------------------------------------------
+getCats <- function(stim) {
+  # finding marker names and making category count matrix
+marker_names <- unique(
+    unlist( strsplit( gsub("!", "", colnames(stim)), "&", fixed=TRUE ) )
+  )
+  n_markers <- length(marker_names)
+
+  cats <- as.data.frame( matrix(0, nrow=ncol(stim), ncol=length(marker_names)))
+  rownames(cats) <- colnames(stim)
+  colnames(cats) = marker_names
+
+  for (i in seq_along(cats)) {
+    #cats[, i] <- as.integer(grepl( paste0( colnames(cats)[i], "+" ), rownames(cats), fixed=TRUE ))
+    cats[,i] <-
+      as.integer(!grepl(paste0("!",colnames(cats)[i],"(&|$)+"),rownames(cats),fixed =
+                          FALSE))
+  }
+  cats$Counts <- apply(cats, 1, sum)
+  
+  cats <- as.matrix(cats)
+}
+
+#-------------------------------------------------------------------------
+# FUNCTION for COMPASS 
+# @param: stim and unstim count matrices, string denoting column name of ID, 
+#         meta DF, number of iterations for MCMC, seed, out directory, prefix for file name
+# @return: NA
+#-------------------------------------------------------------------------
+COMPASS_orig <- function(n_s, n_u, individual_id, meta, iter, seed, outdir, dataName) {
+  
+  # n_s (I x K), n_u (I x K), iters, replications, X (I x J)
+  starttime = Sys.time()
+  COMPASSobj <- SimpleCOMPASS(n_s = n_s,
+                                   n_u = n_u,
+                                   meta=meta,
+                                   individual_id = individual_id,
+                                   iterations = iter,
+                                   replications = 7)
+  endtime= Sys.time()
+
+saveRDS(list(COMPASSobj = COMPASSobj, runTime = endtime-starttime),
+           paste0(outdir, "/", dataName, iter, "_seed", seed,".rds"))
+
+  
+rm(COMPASSobj)
+
+}
+
+
+#-------------------------------------------------------------------------
+# FUNCTION for COMPASS covariate
+# @param: stim and unstim count matrices, covariate matrix, categories matrix (see output of getCats),
+#         number of iterations for MCMC, seed, out directory, prefix for file name
+# @return: NA
+#-------------------------------------------------------------------------
+COMPASS_covar <- function(n_s, n_u, X, categories, iter, seed, outdir, dataName) {
+  set.seed(seed)
+  # n_s (I x K), n_u (I x K), iters, replications, X (I x J)
+  starttime = Sys.time()
+  COMPASScovarobj <- .COMPASS.covariate(n_s=n_s, n_u=n_u,
+                                         categories = categories,
+                                         iterations = iter, replications = 7, X = X)
+  endtime= Sys.time()
+
+saveRDS(list(COMPASScovarobj = COMPASScovarobj, runTime = endtime-starttime),
+          paste0(outdir, "/", dataName, iter, "_seed", seed,".rds"))
+
+rm(COMPASScovarobj)
+
+}
+
+
+#########################################################
+# FUNCTION for running COMPASS and COMPASS-covar for one seed
+# @param: stim and unstim count matrices, string denoting column name of ID, 
+#         meta DF, number of iterations for MCMC, seed, out directory, prefix for file name
+# @return: NA
+#########################################################
+runCOMPASS<- function(n_s, n_u, individual_id, meta, X, categories, iter, seed, outdirorig, outdircovar, dataName) {
+  COMPASS_orig(n_s, n_u, individual_id, meta, iter, seed, outdirorig, dataName)
+  COMPASS_covar(n_s, n_u, X, categories, iter, seed, outdircovar, paste0(dataName, "covar"))
+}
+```
+
+
+
+
+
+# Splitting Train-Test
+
+
+# COMPASS and COMPASS-covariate in Parallel
+
+We need to create and run test and train COMPASS/COMPASS-cov objects. 
+
+### Defining Splits, Running Train COMPASS/COMPASS-covar
+
+I create a data partition to define the 5 train-test splits we'll use for RV144. It's created so that 20\% patients are uninfected in each split. 
+
+To prepare the input for COMPASS and COMPASS-covar, we make lists for the following train and test quantities:
+
+- count matrices (nS and nU)
+- covariate matrices (Luminex and PTID)
+- meta information
+
+
+```{r runCOMPASS, options}
+set.seed(47)
+RV144folds <- createDataPartition(rv144$data$meta %>% filter(PTID %in% flow_agg$PTID) %>% .$infect, p=0.8, times=5)
+
+#--------------------------------------------------------
+# Divided train and test quantities
+#--------------------------------------------------------
+
+NS.train <- lapply(1:5, function(i) flow_agg %>% filter(Stimulation=="Stim") %>%
+               .[RV144folds[[i]],]  %>% arrange(PTID) %>% `rownames<-`(.$PTID) %>%
+                select(-c(PTID, Stimulation)))
+
+NU.train <- lapply(1:5, function(i) flow_agg %>% filter(Stimulation=="noStim") %>%
+               .[RV144folds[[i]],] %>% arrange(PTID) %>%
+                 `rownames<-`(.$PTID) %>%select(-c(PTID, Stimulation)))
+
+
+NS.test <- lapply(1:5, function(i) flow_agg %>% filter(Stimulation=="Stim") %>%
+                                  .[setdiff(1:(nrow(flow_agg)/2),
+                                            RV144folds[[i]]),] %>% arrange(PTID) %>% 
+                    `rownames<-`(.$PTID) %>% select(-c(PTID, Stimulation)))
+
+NU.test <- lapply(1:5, function(i) flow_agg %>% filter(Stimulation=="noStim") %>%
+                                  .[setdiff(1:(nrow(flow_agg)/2),
+                                            RV144folds[[i]]),] %>% arrange(PTID) %>%
+                    `rownames<-`(.$PTID) %>% select(-c(PTID, Stimulation)))
+
+CAT <- lapply(1:5, function(i) getCats(NS.train[[i]]))
+
+covMatrices.train <- lapply(1:5, function(i) antibodyDF_transf %>% .[RV144folds[[i]],] %>% 
+                              arrange(PTID) %>% `rownames<-`(.$PTID) %>% select(Luminex))
+
+covMatrices.test <- lapply(1:5, function(i) antibodyDF_transf %>%
+                                  .[setdiff(1:nrow(antibodyDF_transf), RV144folds[[i]]),] %>% 
+                             arrange(PTID) %>% `rownames<-`(.$PTID) %>% select(Luminex))
+
+Metas <- lapply(1:5, function(i) meta[RV144folds[[i]],])
+
+Metas.test <- lapply(1:5, function(i) meta[setdiff(1:nrow(meta),
+                                                   RV144folds[[i]]),])
+
+seeds <- 1:5
+
+#--------------------------------------------------------
+# COMPASScov on train partitions: uncomment to run
+#--------------------------------------------------------
+
+# cl <- makeCluster(5) # create a cluster with 5 workers
+# registerDoParallel(cl) # register the cluster for parallel computation
+# 
+# results <- foreach(i = 1:5, .packages = c("dplyr", "COMPASS")) %dopar% {
+# 
+#   COMPASS_covar(NS.train[[i]] %>% as.matrix(),
+#                 NU.train[[i]] %>% as.matrix(), covMatrices.train[[i]] %>% as.matrix(),
+#                 CAT[[i]],
+#                 iter=40000, seed=seeds[i],
+#                 "/work/fwh6/RV144/SplitRuns/trainDat/",
+#                 "covar")
+# 
+#   COMPASS_orig(NS.train[[i]] %>% as.matrix(),
+#                 NU.train[[i]] %>% as.matrix(),
+#                "PTID", Metas[[i]],
+#                iter=40000, seed=seeds[i],
+#                "/work/fwh6/RV144/SplitRuns/trainDat/",
+#                 "orig")
+# }
+# 
+# stopCluster(cl) # stop the cluster
+# 
+# The below is for checking attributes of the COMPASS-covar object created
+# checkCovRun <- readRDS("/work/fwh6/RV144/SplitRuns/trainDat/covar40000_seed1.rds")
+# checkOrigRun <- readRDS("/work/fwh6/RV144/SplitRuns/trainDat/orig40000_seed1.rds")
+# checkCovRun$COMPASScovarobj$mean_gamma %>% dim()
+# checkCovRun$COMPASScovarobj$beta %>% dim()
+# checkOrigRun$COMPASSobj$fit$mean_gamma %>% dim()
+# all(checkCovRun$COMPASScovarobj$mean_gamma %>% rownames() == checkOrigRun$COMPASSobj$data$meta$PTID)
+# all(checkCovRun$COMPASScovarobj$mean_gamma %>% rownames() == covMatrices.train[[1]] %>% rownames())
+# all(checkCovRun$COMPASScovarobj$mean_gamma %>% rownames() == checkOrigRun$COMPASSobj$data$counts_s %>% names())
+```
+
+
+## Test COMPASS/COMPASS-covar
+
+```{r runCOMPASScov, options}
+#--------------------------------------------------------
+# COMPASScov on test partitions
+#--------------------------------------------------------
+
+# cl <- makeCluster(5) # create a cluster with 5 workers
+# registerDoParallel(cl) # register the cluster for parallel computation
+# 
+# results <- foreach(i = 1:5, .packages = c("dplyr", "COMPASS")) %dopar% {
+# 
+#   COMPASS_covar(NS.test[[i]] %>% as.matrix(),
+#                 NU.test[[i]] %>% as.matrix(), covMatrices.test[[i]] %>% as.matrix(),
+#                 CAT[[i]],
+#                 iter=40000, seed=seeds[i],
+#                 "/work/fwh6/RV144/SplitRuns/testDat/",
+#                 "covar")
+# 
+#   COMPASS_orig(NS.test[[i]] %>% as.matrix(),
+#                 NU.test[[i]] %>% as.matrix(),
+#                "PTID",  Metas.test[[i]],
+#                iter=40000, seed=seeds[i],
+#                "/work/fwh6/RV144/SplitRuns/testDat/",
+#                 "orig")
+# }
+# 
+# stopCluster(cl) # stop the cluster
+# 
+# The below is for checking attributes of the original object created
+# checkOrigRun <- readRDS("/work/fwh6/RV144/SplitRuns/testDat/orig40000_seed1.rds")
+# checkOrigRun$COMPASSobj$data$meta %>% dim()
+```
+
+
+
+# Read in COMPASS Results
+
+To test each fold's ability to predict infection for each test patient, we first use various methods to calculate or predict the PFS for the test set.
+
+We then:
+
+1. Estimate the theta coefficients for the logistic model for infection, based on train.
+2. Plug in test covariates (including estimated PFS/FS) into the above model.
+3. Calculate AUC/draw ROC.
+
+
+### Running COMPASS on Test Set
+
+One way of getting PFS for the test set is simply running COMPASS-cov or COMPASS on the test set, then calculating the PFS.
+
+```{r read-in-folds, options}
+
+covarTrains <- readInObjs("/work/fwh6/RV144/SplitRuns/trainDat/", pattern=".*covar40000_.*")
+origTrains <- readInObjs("/work/fwh6/RV144/SplitRuns/trainDat/", pattern=".*orig40000_.*")
+covarTests <- readInObjs("/work/fwh6/RV144/SplitRuns/testDat/", pattern=".*covar40000_.*")
+origTests <- readInObjs("/work/fwh6/RV144/SplitRuns/testDat/", pattern=".*orig40000_.*")
+
+
+# cleaning up COMPASS/COMPASS-cov objects
+RV144.train.orig <- lapply(1:5, function(i) origTrains[[i]]$COMPASSobj)
+RV144.test.orig <- lapply(1:5, function(i) origTests[[i]]$COMPASSobj)
+RV144.train.COMPASScovarObjs <- lapply(1:5, function(i) COVtoCOMPASSObj(covarTrains[[i]], RV144.train.orig[[i]], covMatrices.train[[i]]))
+RV144.test.COMPASScovarObjs <- lapply(1:5, function(i) COVtoCOMPASSObj(covarTests[[i]], RV144.test.orig [[i]], covMatrices.test[[i]]))
+
+
+# list of ROC result objects
+RV144.wTestRun.Results <- lapply(1:5,
+                                 function(i) rocs_Calc(RV144.train.COMPASScovarObjs[[i]], RV144.test.COMPASScovarObjs[[i]], 
+                                                       RV144.train.orig[[i]], RV144.test.orig[[i]], 
+          c("PFSCovar"),
+          c("PFSOrig"), "infect", "INFECTED", model="glm"))
+
+# binding into table
+RV144.wTestRun.DF <- do.call(rbind, lapply(RV144.wTestRun.Results, function(result) COMPASSTestRun.Results(result, model="glm"))) 
+
+RV144.wTestRun.DF %>%
+  kbl() %>%
+  kable_styling()
+
+
+```
+
+### Predicting PFS Using X (for Test Only)
+
+A more circuitious way is to use the testing data covariates (Luminex) to predict the testing data mean gamma, and by extension, PFS and FS. This occurs as follows:
+
+1. We pull beta samples from the train beta posterior for each of the test samples and take the mean.
+2. We predict mean gamma by multiplying Luminex level by the mean beta sample coefficient (and adding mean beta sample intercept), then taking inverse logit.
+2. We use predicted mean gamma to calculate estimated PFS and FS for test.
+
+Coding-wise, we first calculate the mean beta from the train COMPASS-cov object. We then produce new test COMPASS-covar objects by replacing mean gamma in the test COMPASS-covar objects with the predicted mean gamma gotten from the summary train beta (steps 1 and 2). We then input the original COMPASS train + test objects, the train COMPASS-covar object, and the new test COMPASS-covar object into the ROC calculation function.
+
+```{r compass-covar-CD4_notsparse, fig.height=10}
+
+# get mean betas and new COMPASS-covar objects with predicted mean gamma
+RV144.betas <- lapply(1:5, function(i) apply(RV144.train.COMPASScovarObjs[[i]]$fit$beta, c(1,2), mean))
+PredMG.RV144.test.COMPASScovarObjs <- lapply(1:5, function(i) getPredGamma(RV144.test.COMPASScovarObjs[[i]], RV144.betas[[i]]))
+
+RV144.wPredMG.Results <- lapply(1:5,
+                                 function(i) rocs_Calc(RV144.train.COMPASScovarObjs[[i]], PredMG.RV144.test.COMPASScovarObjs[[i]], 
+                                                       RV144.train.orig[[i]], RV144.test.orig[[i]], 
+          c("PFSCovar"), 
+          c("PFSOrig"), "infect", "INFECTED", model="glm"))
+
+
+RV144.wPredMG.DF <- do.call(rbind, lapply(RV144.wPredMG.Results, function(result) COMPASSTestRun.Results(result, model="glm")))
+
+RV144.wPredMG.DF %>%
+  kbl() %>%
+  kable_styling()
+
+
+```
+
+### Posterior Predictive Infection Status
+
+A final way is to sample 100 runs from the train MCMC for each fold. For each run, use the sampled train beta to predict the test mean gamma and PFS in the same manner as the previous method. Then, using a model for infection trained on the train data, predict the probability of infection for the test set. 
+
+Average the probabilities over the 100 runs, then use that to calculate the ROC for that fold.
+
+```{r infect-posterior, options}
+
+RV144.wPostPredInf.Results <- lapply(1:5,
+                                 function(i) rocs_Calc_Avg(RV144.train.COMPASScovarObjs[[i]],
+                                                           PredMG.RV144.test.COMPASScovarObjs[[i]], 
+                                                       RV144.train.orig[[i]], RV144.test.orig[[i]], 
+          c("PFSCovar"), 
+          c("PFSOrig"), "infect", "INFECTED", nSamps=100, model="glm"))
+
+COMPASSPostPred.Results <- function(foldResult, model="glm") {
+  if (model=="glm") {
+  return(data.frame(numTestInfected = length(foldResult$testCovROC$cases),
+             numTestHealthy = length(foldResult$testCovROC$controls),
+             TestCovarROC = foldResult$testCovROC$auc,
+             nSamps = ncol(foldResult$probsPos)))
+  }
+  else return(data.frame(numTestInfected = length(foldResult$testCovROC$cases),
+             numTestHealthy = length(foldResult$testCovROC$controls),
+             TestCovarROC = foldResult$testCovROC$auc,
+             nSamps = ncol(foldResult$probsPos)))
+}
+
+RV144.wPostPredInf.DF <- do.call(rbind, lapply(RV144.wPostPredInf.Results, function(result) COMPASSPostPred.Results(result, model="glm"))) 
+
+RV144.wPostPredInf.DF %>%
+  kbl() %>%
+  kable_styling()
+
+```
+
+
+### Polyfunctional Index
+
+We use a polyfunctional index calculated from the frequency of cells performing $i$ functions. We first sum up the stimulated count matrix columns to aggregate cells by number of functions they perform, then calculate the percentage.
+
+Once we have the percentage matrix, we feed it into the Polyfunctionality index formula.
+
+We then aggregate these PI scores to meta information and antibody covariates and run a LASSO.
+
+We then get the ROC associated with the PI+covariate model for the test and train data.
+
+```{r pi-roc, options}
+
+PIRun.Results <- function(foldResult, model="glm") {
+  if (model=="glm") {
+  return(data.frame(numTrainInfected = length(foldResult$trainOrigROC$cases),
+             numTrainHealthy = length(foldResult$trainOrigROC$controls),
+             numTestInfected = length(foldResult$testOrigROC$cases),
+             numTestHealthy = length(foldResult$testOrigROC$controls),
+             TrainOrigROC = foldResult$trainOrigROC$auc,
+             TestOrigROC = foldResult$testOrigROC$auc))
+  }
+  else return(data.frame(numTrainInfected = length(foldResult$trainOrigROC$cases),
+             numTrainHealthy = length(foldResult$trainOrigROC$controls),
+             numTestInfected = length(foldResult$testOrigROC$cases),
+             numTestHealthy = length(foldResult$testOrigROC$controls),
+             TrainOrigROC = foldResult$trainOrigROC$auc,
+             TestOrigROC = foldResult$testOrigROC$auc))
+}
+
+
+numCyt <- 6
+RV144.wPI.Results <- lapply(1:5, function(i) rocs_Calc_PI(RV144.train.orig[[i]], RV144.test.orig[[i]], 
+             c("PI"), "infect", "INFECTED",
+             q=5, model="glm"))
+
+RV144.wPI.DF <- do.call(rbind, lapply(RV144.wPI.Results, function(result) PIRun.Results(result, model="glm"))) 
+RV144.wPI.DF %>%
+  kbl() %>%
+  kable_styling()
+```
+
+### Visualization of AUCs
+
+```{r auc-viz, options}
+RV144.wTestRun.DF %>%
+  cbind(RV144.wPredMG.DF %>% select(TestCovarROC) %>% rename(TestPredMGROC=TestCovarROC)) %>%
+  cbind(RV144.wPostPredInf.DF %>% select(TestCovarROC) %>% rename(TestPostPredInfROC=TestCovarROC)) %>%
+  cbind(RV144.wPI.DF %>% select(TestOrigROC) %>% rename(TestPIROC=TestOrigROC))  %>%
+  mutate(across(TrainCovarROC:TestPIROC, ~ as.numeric(.x))) %>%
+  pivot_longer(TrainCovarROC:TestPIROC, names_to = "ROCType", values_to = "ROC") %>%
+  mutate(TrainTest=if_else(str_detect(ROCType,"Test"), "Test", "Train")) %>%
+  ggplot(aes(x=reorder(ROCType,ROC),y=ROC, color=TrainTest)) + geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  labs(x="ROC Type", title = "ROC over Five Folds of Infection Regression")
+
+
+```
+
+
+# Session Info
+
+```{r sessioninfo}
+
+sessionInfo()
+
+```

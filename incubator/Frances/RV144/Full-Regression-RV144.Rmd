@@ -29,6 +29,31 @@ options(knitr.duplicate.label = 'allow')
 
 ```
 
+```{r Baseinfo,eval=FALSE}
+
+#General info ----------------------
+
+#
+
+# Created: 2023-04-29
+
+#
+
+# Author: Frances Hung
+
+#
+
+# Program: /CHSI/PackageDev/COMPASScovariate/incubator/Frances/RV144/Full-Regression-RV144
+
+#
+
+# Description: Regression analysis on RV144 mirroring what was done in the COMPASS paper. Adding COMPASS-covar.
+#--- --- --- --- --- --- --- --- --- --- --- --- ---
+
+#--- --- --- --- --- --- --- --- --- --- --- --- ---
+
+```
+
 
 ```{r cars}
 #library(Kmisc)

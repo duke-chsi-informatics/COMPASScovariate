@@ -1,0 +1,349 @@
+---
+title: "RV144 Visualization"
+
+author:
+
+                - "Frances Hung"
+
+                - "Biostatistics, Epidemiology and Research Design (BERD) Core"
+
+                - "Center for Human Systems Immunology (CHSI)"
+
+date: "`r  Sys.Date()`"
+
+output:
+
+  html_document:
+
+    toc: true
+
+    toc_float: true
+
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE,message = FALSE)
+options(knitr.duplicate.label = 'allow')
+
+```
+
+
+```{r cars}
+#library(Kmisc)
+#library(COMPASS)
+
+library(ComplexHeatmap)
+library(ggplot2)
+library(ggsci)
+library(gridExtra)
+library(osDesign)
+library(pROC)
+library(plyr)
+library(reshape2)
+library(formattable)
+library(gridExtra)
+library(data.table)
+library(RColorBrewer)
+library(tidyverse)
+```
+
+```{r Baseinfo,eval=FALSE}
+
+#General info ----------------------
+
+#
+
+# Created: 2023-04-29
+
+#
+
+# Author: Frances Hung
+
+#
+
+# Program: Visualization.RMD
+
+#
+
+# Description: Old attempt at visualization
+
+#--- --- --- --- --- --- --- --- --- --- --- --- ---
+
+#--- --- --- --- --- --- --- --- --- --- --- --- ---
+
+```
+
+
+```{r primVars, options}
+source("Regression/my.tps.function.R")
+source("Regression/primaryinferences_cch.r")
+# the other primary covariates
+source("Regression/primaryinferences_main_090111.r")
+primVars <- dat %>%
+  select(pin,
+         primary_iga_score_tomaras_wk26,
+         primary_avidity_a244_gdneg_delta11_alam_wk26, 
+         primary_adcc_luc_92th023_evans_wk26,
+         primary_nab_tzmbl_a3r5_auc_afrims_siriraj_montefiori_wk26,
+         primary_v2_gp70_v1v2_zollapazner_wk26) %>%
+  dplyr::rename(PTID_orig=pin,
+         IgAprim=primary_iga_score_tomaras_wk26,
+         Avidprim=primary_avidity_a244_gdneg_delta11_alam_wk26, 
+         ADCCprim=primary_adcc_luc_92th023_evans_wk26,
+         NAbprim=primary_nab_tzmbl_a3r5_auc_afrims_siriraj_montefiori_wk26,
+         V2prim=primary_v2_gp70_v1v2_zollapazner_wk26)
+# linking IDs
+orig <- read.csv("Regression/PTID_map_case_control.csv", header=T, sep=",")
+
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# FUNCTION for getting mean gamma with default 50% burn-in, no thin
+#--- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+mean_gam <- function(gammaSamps, percburn) {
+  N=dim(gammaSamps)[3]
+  Nburn=round(percburn*N);
+  Mgamma = mat.or.vec(dim(gammaSamps)[1],dim(gammaSamps)[2]);
+  Nseq = seq(Nburn+1,N,by=1)
+  for (ttt in Nseq) {
+    Mgamma = Mgamma + gammaSamps[,,ttt]; #thining
+  }
+  Mgamma = Mgamma/(N-Nburn);
+  return(Mgamma)
+}
+```
+
+
+
+
+```{r source, echo=FALSE}
+# load in RV144COMPASSOrig and RV144COMPASScovar
+load("RV144COMPASS.RData")
+
+#meta data from COMPASS original
+metaOrig <- RV144COMPASSOrig$data$meta
+meta <- metaOrig
+fit <- RV144COMPASSOrig
+
+colsToKeep <- RV144COMPASSOrig$fit$mean_gamma %>% as.data.frame() %>%
+  select(where(~mean(.x)>0.01)) %>% colnames() %>%
+  union(RV144COMPASSCovar$fit$mean_gamma %>% as.data.frame() %>%
+  select(where(~mean(.x)>0.01)) %>% colnames())
+
+```
+
+# Heatmap
+
+In order to make a heatmap with ComplexHeatmap, we need:
+
+- a matrix of mean gamma variables to plot
+
+We need to order the heatmap using cytokines expressed on the x-axis and a provided group on the y-axis. In order to do so, we do some pre-processing to define the order of columns to feed into the column_order parameter of Heatmap:
+
+- get rid of gates with little mean expression (<0.01) for covariate
+- exclude zero-valued cytokines from the annotation
+
+### COMPASS Original
+
+```{r heatmap-playground, options}
+#########################################################
+# Color scheme
+#########################################################
+my_palette <- pal_igv("default", alpha=0.7)(15)
+my_palette_heat <- my_palette[15:13]
+my_palette_hm <- my_palette[1:3]
+my_palette_ha <- my_palette[4:9]
+my_palette_hr <- my_palette[10:12]
+
+#########################################################
+# Master DF for plotting: get rid of underexpressed columns(keep same gates as covar)
+#########################################################
+gammaToPlot <- RV144COMPASSOrig$fit$mean_gamma %>% as.data.frame() %>%
+  select(colsToKeep)
+  #select(where(~mean(.x)>0.01)) %>% as.matrix()# %>%.[,1:(ncol(gammaToPlot)-1)]
+
+#########################################################
+# Setup for column (cytokine) annotations and ordering
+#########################################################
+# order by polyfunctionality
+colsOrig <- colnames(gammaToPlot)
+counts_nopresence <- str_count(colsOrig,"!")
+
+# sorted columns 
+colsSorted <- colsOrig[order(counts_nopresence, decreasing = TRUE)]
+indicesSorted <-order(counts_nopresence, decreasing=TRUE)
+
+# cytokine names
+cytNames <- colsOrig[1] %>% str_remove_all("!") %>% str_split("&") %>% unlist()
+
+# indicators for cytokine expression for each of the gates (original order)
+cytLabelDF <- data.frame(Gates=colsOrig) %>%
+  mutate(gatessplit=str_split(Gates,"&")) %>%
+  unnest_wider(gatessplit,
+               names_sep = ",") %>%
+  `colnames<-`(c("Gates",cytNames)) %>%
+  dplyr::mutate(across(-Gates,~ifelse(str_detect(.x,"!"), 0, 1))) %>%
+  select(-Gates) %>%
+  # exclude all-zero cytokines
+  select(where(~any(.x)==1))
+  
+#########################################################
+# Setup for row annotation and ordering
+#########################################################
+metaInfection <- gammaToPlot %>% as.data.frame() %>%
+  rownames_to_column(var="PTID") %>%
+  left_join(RV144COMPASSOrig$data$meta %>% as.data.frame() %>%
+              select(PTID, vaccine, infect, Luminex))
+
+# order by infection status
+rowsSorted <- metaInfection %>% 
+  mutate(group_num=as.numeric(as.factor(infect)))
+
+# sorted rows
+rowindicesSorted <-order(rowsSorted$group_num, decreasing=TRUE)
+
+#########################################################
+# Annotations and heatmap
+#########################################################
+# annotation object for columns
+ha = HeatmapAnnotation(df = cytLabelDF, 
+                       which="column",
+                       show_legend = FALSE)
+
+# annotation object for rows (infection vs. no infection)
+hr = HeatmapAnnotation(df= metaInfection %>% select(infect),
+                       which="row",
+                       show_annotation_name = FALSE,
+                       annotation_label="Infection Status",
+                       col = list(`infect`= c("NON-INFECTED"=my_palette_hr[1], 
+                                                        "INFECTED"=my_palette_hr[2], 
+                                                       "PLACEBO"=my_palette_hr[3])))
+
+#png(filename="Regression/Plots/heatmap-original-RV144.png")
+Heatmap(gammaToPlot, name="Estimated Gamma", col=my_palette_heat,
+        column_order = indicesSorted,
+        row_order = rowindicesSorted,
+        row_split = rowsSorted$group_num,
+        column_title = "Original COMPASS",
+        row_title="Patients",
+        show_column_names = FALSE,
+        show_row_names = FALSE,
+         bottom_annotation = ha,
+        right_annotation = hr,
+        width = unit(9, "cm")) -> OrigHeatmap
+
+
+```
+
+
+### COMPASS Covariate
+
+```{r heatmap-covar, options}
+
+#########################################################
+# Color scheme
+#########################################################
+my_palette <- pal_igv("default", alpha=0.7)(15)
+my_palette_heat <- my_palette[15:13]
+my_palette_hm <- my_palette[1:3]
+my_palette_ha <- my_palette[4:9]
+my_palette_hr <- my_palette[10:12]
+
+
+#########################################################
+# Master DF for plotting: get rid of underexpressed columns
+#########################################################
+gammaToPlot <- RV144COMPASSCovar$fit$mean_gamma %>% as.data.frame() %>%
+  select(colsToKeep)
+  #select(where(~mean(.x)>0.01)) %>% as.matrix() #%>% .[,1:(ncol(gammaToPlot)-1)]
+
+betatoPlot <-data.frame(gates=colnames(RV144COMPASSCovar$fit$mean_gamma),
+                        effects=c(apply(RV144COMPASSCovar$fit$beta, 1:2, mean)[,2],0)) %>%
+  filter(gates %in% colnames(gammaToPlot))
+
+#########################################################
+# Setup for column (cytokine) annotations and ordering
+#########################################################
+# order by polyfunctionality
+colsOrig <- colnames(gammaToPlot)
+counts_nopresence <- str_count(colsOrig,"!")
+
+# sorted columns 
+colsSorted <- colsOrig[order(counts_nopresence, decreasing = TRUE)]
+indicesSorted <-order(counts_nopresence, decreasing=TRUE)
+
+# cytokine names
+cytNames <- colsOrig[1] %>% str_remove_all("!") %>% str_split("&") %>% unlist()
+
+# indicators for cytokine expression for each of the gates (original order)
+cytLabelDF <- data.frame(Gates=colsOrig) %>%
+  mutate(gatessplit=str_split(Gates,"&")) %>%
+  unnest_wider(gatessplit,
+               names_sep = ",") %>%
+  `colnames<-`(c("Gates",cytNames)) %>%
+  dplyr::mutate(across(-Gates,~ifelse(str_detect(.x,"!"), 0, 1))) %>%
+  select(-Gates) %>%
+  # exclude all-zero cytokines
+  select(where(~any(.x)==1))
+  
+#########################################################
+# Setup for row annotation and ordering
+#########################################################
+metaInfection <- gammaToPlot %>% as.data.frame() %>%
+  rownames_to_column(var="PTID") %>%
+  left_join(RV144COMPASSCovar$data$meta %>% as.data.frame() %>%
+              select(PTID, vaccine, infect, Luminex))
+
+# order by infection status
+rowsSorted <- metaInfection %>% 
+  mutate(group_num=as.numeric(as.factor(infect)))
+
+# sorted rows
+rowindicesSorted <-order(rowsSorted$group_num, decreasing=TRUE)
+
+
+#########################################################
+# Annotations and heatmap
+#########################################################
+# annotation object for columns
+ha = HeatmapAnnotation(df = cytLabelDF, 
+                       which="column",
+                       show_legend = FALSE,
+                       `Effects`=anno_barplot(betatoPlot$effects),
+                       show_annotation_name = c(Effects=FALSE),
+                       col = list(cytLabelDF=my_palette_ha))
+
+# annotation object for rows (infection vs. no infection)
+hr = HeatmapAnnotation(df= metaInfection %>% select(infect),
+                       which="row",
+                       annotation_label="Infection Status",
+                       Lum=anno_points(metaInfection$Luminex),
+                       annotation_name_side = "top",
+                       show_annotation_name = c(`Infection Status`=FALSE,"Lum"=FALSE),
+                       col = list(`infect`= c("NON-INFECTED"=my_palette_hr[1], 
+                                                        "INFECTED"=my_palette_hr[2], 
+                                                       "PLACEBO"=my_palette_hr[3])))
+
+#png(filename="Regression/Plots/heatmap-covar-RV144.png")
+Heatmap(gammaToPlot, name="Estimated Gamma", col=my_palette_heat,
+        column_order = indicesSorted,
+        row_order = rowindicesSorted,
+        row_split = rowsSorted$group_num,
+        column_title = "COMPASS-Covariate",
+        row_title="Patients",
+        show_column_names = FALSE,
+        show_row_names = FALSE,
+         bottom_annotation = ha,
+        right_annotation = hr,
+        width = unit(10, "cm")) -> CovarHeatmap
+```
+
+```{r concatHM, options}
+dualPlot <- OrigHeatmap + CovarHeatmap
+
+
+
+HMPlot <- draw(dualPlot, ht_gap=unit(1,"cm"), row_title = "Mean Gamma Comparisons")
+
+ggsave("heatmap.png", HMPlot, width = 12, height = 10)
+```

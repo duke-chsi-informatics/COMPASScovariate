@@ -55,8 +55,7 @@ options(knitr.duplicate.label = 'allow')
 
 #
 
-# Description: Check overlap between flow and antibody data, then run COMPASS vs. COMPASS-covar analysis for Aim 2 CTOT patients.
-
+# Description: Exploration (including convergence measures, heatmaps of beta coefficients, boxplots of scores, etc.) of RV144 COMPASS/COMPASS-covar results.
 #--- --- --- --- --- --- --- --- --- --- --- --- ---
 
 #--- --- --- --- --- --- --- --- --- --- --- --- ---
@@ -81,8 +80,8 @@ library(COMPASS)
 library(tidyverse)
 
 
-# the RDATA file provided by Lynn containing original paper's COMPASS object
-load(file="~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144-2023-02-09.rda")
+# the RDATA file provided by Lynn containing original paper's COMPASS object. https://zenodo.org/record/46009#.Y73dWuzMJaQ
+load(file="/work/fwh6/RV144/rv144-2023-02-09.rda")
 
 #unstim counts
 nU <- rv144$data$n_u %>% as.data.frame()
@@ -111,6 +110,8 @@ flow_agg <- nU %>% mutate(Stimulation="noStim") %>%
 source("~/CHSI/PackageDev/COMPASScovariate/R/COMPASS-covariate.R")
 source("~/CHSI/PackageDev/COMPASScovariate/R/updatebeta.R")
 source("~/CHSI/PackageDev/COMPASScovariate/R/utils.R")
+source("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/helperscripts.R")
+source("~/CHSI/PackageDev/COMPASScovariate/R/Scores.R")
 
 ```
 
@@ -272,7 +273,7 @@ return(corPlot)
 
 ## Logging/Scaling Antibody Measures
 
-We log-scale Luminex because it ranges from 0-1. The below histogram  shows the untransformed covariates and the violin plot shows the covariates after scaling the logged Luminex (if Luminex = 0, then we take log(Luminex + 0.001)).
+We log-scale Luminex because it ranges from 0-1. The below histogram  shows the untransformed covariates and the violin plot shows the covariates after scaling the logged Luminex (if Luminex = 0, then we take log(Luminex + 1)).
 
 
 ```{r ex-scale-log, options}
@@ -286,11 +287,7 @@ antibodyDF %>%
   xlab("Value")
 
 antibodyDF_transf <- antibodyDF %>%
-  mutate(logLuminex = ifelse(Luminex==0, 
-                          log(Luminex + 0.001),
-                          log(Luminex))) %>%
-  #scale it
-  mutate(Luminex = scale(logLuminex))
+  mutate(Luminex = scale(log(Luminex + 1)))
 
 #checking log and scale work correctly
 # antibodyDF_transf %>%
@@ -345,49 +342,57 @@ We look at the placebo flow differences to see if they could potentially drastic
 ```{r COMPASS-orig, options}
 #-------------------------------------------------------------------------
 # FUNCTION for COMPASS 
-# takes in flow data frame, and suffix for naming rds file
-# TODO: fix to use COMPASS discrete?
+# takes in flow data frame, metadata, iterations, suffix for naming rds file, train index (from meta)
 #-------------------------------------------------------------------------
-COMPASS_orig <- function(flowDF_cut, metaDF, postfix) {
-  
-  # magic code to make it work...
-  n_s <- flowDF_cut %>% filter(Stimulation=="Stim") %>%
-    arrange(PTID) %>%
-    `rownames<-`(.$PTID) %>%
-    select(-c(PTID, Stimulation)) %>%
-    as.matrix()
-  
-  n_u <- flowDF_cut %>% filter(Stimulation=="noStim") %>%
-    arrange(PTID) %>%
-    `rownames<-`(.$PTID) %>%
-    select(-c(PTID, Stimulation)) %>%
-    as.matrix()
-  
-  categories <- getCats(flowDF_cut %>% filter(Stimulation=="noStim") %>%
-    arrange(PTID) %>% 
-    `rownames<-`(.$PTID) %>%
-    select(-c(PTID, Stimulation)))
-  
-  I <- nrow(n_s)
+COMPASS_orig <- function(n_s, n_u, individual_id, meta, iter, seed, outdir, dataName) {
   
   # n_s (I x K), n_u (I x K), iters, replications, X (I x J)
   starttime = Sys.time()
-  COMPASScovarobj <- SimpleCOMPASS(n_s = n_s,
+  COMPASSobj <- SimpleCOMPASS(n_s = n_s,
                                    n_u = n_u,
-                                   meta=metaDF,
-                                   individual_id = "PTID",
-                                   iterations = 20,
+                                   meta=meta,
+                                   individual_id = individual_id,
+                                   iterations = iter,
                                    replications = 7)
   endtime= Sys.time()
 
-saveRDS(list(COMPASScovarobj = COMPASScovarobj, runTime = endtime-starttime),
-          paste0("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASSorig20_seed100_new",postfix,".rds"))
+saveRDS(list(COMPASSobj = COMPASSobj, runTime = endtime-starttime),
+           paste0(outdir, "/", dataName, iter, "_seed", seed,".rds"))
 
   
-# saveRDS(list(pp65COMPASSAim2_diffs = COMPASScovarAim2_diffs, runTime = endtime-starttime),
-#           paste0("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/COMPASS-covar/data/pp65Aim2diffsCOMPASS200000_seed100_new",postfix,".rds"))
+rm(COMPASSobj)
+
+}
+
+
+#-------------------------------------------------------------------------
+# FUNCTION for COMPASS covariate
+# takes in flow data frame, covariate data frame, iterations, suffix for naming rds file, train index, seed
+#-------------------------------------------------------------------------
+COMPASS_covar <- function(n_s, n_u, X, categories, iter, seed, outdir, dataName) {
+
+  # n_s (I x K), n_u (I x K), iters, replications, X (I x J)
+  starttime = Sys.time()
+  COMPASScovarobj <- .COMPASS.covariate(n_s=n_s, n_u=n_u,
+                                         categories = categories,
+                                         iterations = iter, replications = 7, X = X)
+  endtime= Sys.time()
+
+saveRDS(list(COMPASScovarobj = COMPASScovarobj, runTime = endtime-starttime),
+          paste0(outdir, "/", dataName, iter, "_seed", seed,".rds"))
+
 rm(COMPASScovarobj)
 
+}
+
+
+#########################################################
+# FUNCTION for running COMPASS and COMPASS-covar for one seed
+# @param
+#########################################################
+runCOMPASS<- function(n_s, n_u, individual_id, meta, X, categories, iter, seed, outdirorig, outdircovar, dataName) {
+  COMPASS_orig(n_s, n_u, individual_id, meta, iter, seed, outdirorig, dataName)
+  COMPASS_covar(n_s, n_u, X, categories, iter, seed, outdircovar, paste0(dataName, "covar"))
 }
 ```
 
@@ -400,42 +405,7 @@ X <- antibodyDF_transf %>%
   select(-c(PTID)) %>% as.matrix()
 
 
-#-------------------------------------------------------------------------
-# FUNCTION for COMPASS covariate
-# takes in flow data frame, and suffix for naming rds file
-#-------------------------------------------------------------------------
-COMPASS_covar <- function(flowDF_cut, X, postfix) {
-  
-  # magic code to make it work...
-  n_s <- flowDF_cut %>% filter(Stimulation=="Stim") %>%
-    arrange(PTID) %>%
-    `rownames<-`(.$PTID) %>% select(-c(PTID, Stimulation)) %>%
-    as.matrix()
-  n_u <- flowDF_cut %>% filter(Stimulation=="noStim") %>%
-    arrange(PTID) %>%
-    `rownames<-`(.$PTID) %>% select(-c(PTID, Stimulation)) %>%
-    as.matrix()
-  categories <- getCats(flowDF_cut %>% filter(Stimulation=="noStim") %>%
-    arrange(PTID) %>%
-    `rownames<-`(.$PTID) %>% select(-c(PTID, Stimulation)))
-  I <- nrow(n_s)
-  
-  # n_s (I x K), n_u (I x K), iters, replications, X (I x J)
-  starttime = Sys.time()
-  COMPASScovarobj <- .COMPASS.covariate(n_s=n_s, n_u=n_u,
-                                         categories = categories,
-                                         iterations = 20, replications = 7, X = X)
-  endtime= Sys.time()
 
-saveRDS(list(COMPASScovarobj = COMPASScovarobj, runTime = endtime-starttime),
-          paste0("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASScovar20_seed100_new",postfix,".rds"))
-
-  
-# saveRDS(list(pp65COMPASSAim2_diffs = COMPASScovarAim2_diffs, runTime = endtime-starttime),
-#           paste0("//duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/CRU/Immunology Center/Palmer/Pro000102592/COMPASS-covar/data/pp65Aim2diffsCOMPASS200000_seed100_",postfix,".rds"))
-rm(COMPASScovarobj)
-
-}
 ```
 
 ```{r beta-heatmap}
@@ -724,22 +694,19 @@ n_s <- flow_agg %>% filter(Stimulation=="Stim") %>%
     select(-c(PTID, Stimulation)))
   I <- nrow(n_s)
   
-  # n_s (I x K), n_u (I x K), iters, replications, X (I x J)
-  starttime = Sys.time()
-  COMPASScovarobj <- COMPASS::SimpleCOMPASS(n_s = n_s,
-                                   n_u = n_u,
-                                   meta = meta,
-                                   individual_id = "PTID",
-                                   iterations = 10,
-                                   replications = 1)
-  endtime= Sys.time()
+  #--------------------------------------------------------
+  # Full run of COMPASS/COMPASS-covar
+  #--------------------------------------------------------
+  
+  # runCOMPASS(n_s, n_u, "PTID", meta, X, categories=getCats(n_s), iter=1000, seed=47,
+  #            outdirorig="/work/fwh6/RV144/Full", outdircovar="/work/fwh6/RV144/Full",
+  #            dataName="rv144Full")
+
 ```
 
 ```{r compass-orig, fig.height=10}
-set.seed(100)
-COMPASS_orig(flow_agg, meta,"cut")
 
-COMPASSorig<- readRDS("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASSorig20_seed100_newcut.rds")$COMPASScovarobj$fit
+COMPASSorig<- readRDS("/work/fwh6/RV144/Full/rv144Full1000_seed47.rds")$COMPASSobj$fit
 
 
 # mean gamma original
@@ -783,40 +750,8 @@ The below boxplots compare the mean gamma values estimated by COMPASS-covariate 
 - CD154
 - IL17a
 
-```{r todebug, include=FALSE}
-
-n_s <- flow_agg %>% filter(Stimulation=="Stim") %>%
-    arrange(PTID) %>%
-  `rownames<-`(.$PTID) %>%
-    select(-c(PTID, Stimulation)) %>%
-    as.matrix()
-  
-  n_u <- flow_agg %>% filter(Stimulation=="noStim") %>%
-    arrange(PTID) %>%
-    `rownames<-`(.$PTID) %>%
-    select(-c(PTID, Stimulation)) %>%
-    as.matrix()
-  
-  categories <- getCats(flow_agg %>% filter(Stimulation=="noStim") %>%
-    arrange(PTID) %>% 
-    `rownames<-`(.$PTID) %>%
-    select(-c(PTID, Stimulation)))
-  
-  I <- nrow(n_s)
-  
-  # n_s (I x K), n_u (I x K), iters, replications, X (I x J)
-  starttime = Sys.time()
-  COMPASScovarobj <- .COMPASS.covariate(n_s=n_s, n_u=n_u,
-                                         categories = categories,
-                                         iterations = 10, replications = 1, X = X)
-  endtime= Sys.time()
-```
-
 ```{r compass-covar-CD4_notsparse, fig.height=10}
-set.seed(100)
-COMPASS_covar(flow_agg, X, "Lum")
-
-COMPASScovarV2Lum<- readRDS("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASScovar20_seed100_newLum.rds")$COMPASScovarobj
+COMPASScovarV2Lum<- readRDS("/work/fwh6/RV144/Full/rv144Fullcovar1000_seed47.rds")$COMPASScovarobj
 
 beta_sum <- 0
 betaSamps <- COMPASScovarV2Lum$beta
@@ -1032,8 +967,8 @@ cbind(x=COMPASSorig$A_gamma, y=COMPASScovarV2Lum$A_gamma) %>%
 We compare how much the gamma MCMC's converge. 
 
 ```{r gamma-mcmcs, fig.width=10}
-ggarrange(gammaTrace(COMPASScovarV2Lum$gamma, n_s, thin=1000),
-          gammaTrace(COMPASSorig$gamma, n_s, thin=1000))
+# ggarrange(gammaTrace(COMPASScovarV2Lum$gamma, n_s, thin=1000),
+#           gammaTrace(COMPASSorig$gamma, n_s, thin=1000))
 ```
 
 We plot the gamma traceplots for the two gates with the most change in q-value (-+---- and -+-+--).
@@ -1043,10 +978,10 @@ twoGatesMaxQChange <- which(colnames(n_s)%in%
                               c("!TNFa&IFNg&!IL4&!IL2&!CD154&!IL17a",
                                 "!TNFa&IFNg&!IL4&IL2&!CD154&!IL17a"))
 
-ggarrange(gammaTrace(COMPASScovarV2Lum$gamma[,twoGatesMaxQChange,],
-                     n_s[,twoGatesMaxQChange], thin=100),
-          gammaTrace(COMPASSorig$gamma[,twoGatesMaxQChange,],
-                     n_s[,twoGatesMaxQChange], thin=100))
+# ggarrange(gammaTrace(COMPASScovarV2Lum$gamma[,twoGatesMaxQChange,],
+#                      n_s[,twoGatesMaxQChange], thin=100),
+#           gammaTrace(COMPASSorig$gamma[,twoGatesMaxQChange,],
+#                      n_s[,twoGatesMaxQChange], thin=100))
 
 ```
 
@@ -1054,35 +989,35 @@ ggarrange(gammaTrace(COMPASScovarV2Lum$gamma[,twoGatesMaxQChange,],
 We plot the Geweke's, Raftery and Lewis, and Heidelberg and Welch statistic for the two gates' patients' gamma values.
 
 ```{r geweke, options}
-patsForGeweke <- mean_gamma_OG %>% 
-              left_join(mean_gamma_covar, by=c("PTID", "Gate")) %>%
-  mutate(mean_gam_diff = mean_gam.y-mean_gam.x) %>%
-  filter(Gate %in% c("-+----","-+-+--")) %>%
-  # join with ref DFs
-  left_join(patsRefDF %>% rename(PTID=pat_names)) %>%
-  left_join(gateRefDF) %>%
-  select(Gate, PTID, contains("idx")) %>%
-  rowwise() %>%
-  # get Geweke
-  mutate(gewekeCovar=geweke.diag(COMPASScovarV2Lum$gamma[pat_idx, names_idx,])$z,
-         gewekeOrig=geweke.diag(COMPASSorig$gamma[pat_idx,names_idx,])$z) 
-
-#hd <- heidel.diag(COMPASScovarV2Lum$gamma[patsForGeweke$pat_idx,
-#                                          patsForGeweke$names_idx,])
-
-patsForGeweke %>%
-  rename(Covariate=gewekeCovar, Original=gewekeOrig) %>%
-  pivot_longer(cols = c(Covariate, Original),
-               names_to = "COMPASSType", 
-               values_to= "gewScore") %>%
-  group_by(COMPASSType, Gate) %>%
-  mutate(label=paste0(Gate,", N=",sum(!is.na(gewScore)))) %>%
-  ggplot(aes(x=gewScore)) +
-  facet_wrap(COMPASSType~label) +
-  geom_histogram() +
-  labs(x="Geweke Score", y="Count", title="Geweke Scores for -+----, -+-+-- (N=262)")
-
-ggsave("./Regression/Plots/geweke.png", width = 10, height = 8)
+# patsForGeweke <- mean_gamma_OG %>% 
+#               left_join(mean_gamma_covar, by=c("PTID", "Gate")) %>%
+#   mutate(mean_gam_diff = mean_gam.y-mean_gam.x) %>%
+#   filter(Gate %in% c("-+----","-+-+--")) %>%
+#   # join with ref DFs
+#   left_join(patsRefDF %>% rename(PTID=pat_names)) %>%
+#   left_join(gateRefDF) %>%
+#   select(Gate, PTID, contains("idx")) %>%
+#   rowwise() %>%
+#   # get Geweke
+#   mutate(gewekeCovar=geweke.diag(COMPASScovarV2Lum$gamma[pat_idx, names_idx,])$z,
+#          gewekeOrig=geweke.diag(COMPASSorig$gamma[pat_idx,names_idx,])$z) 
+# 
+# #hd <- heidel.diag(COMPASScovarV2Lum$gamma[patsForGeweke$pat_idx,
+# #                                          patsForGeweke$names_idx,])
+# 
+# patsForGeweke %>%
+#   rename(Covariate=gewekeCovar, Original=gewekeOrig) %>%
+#   pivot_longer(cols = c(Covariate, Original),
+#                names_to = "COMPASSType", 
+#                values_to= "gewScore") %>%
+#   group_by(COMPASSType, Gate) %>%
+#   mutate(label=paste0(Gate,", N=",sum(!is.na(gewScore)))) %>%
+#   ggplot(aes(x=gewScore)) +
+#   facet_wrap(COMPASSType~label) +
+#   geom_histogram() +
+#   labs(x="Geweke Score", y="Count", title="Geweke Scores for -+----, -+-+-- (N=262)")
+# 
+# ggsave("./Regression/Plots/geweke.png", width = 10, height = 8)
 ```
 
 We also can use the Raftery and Lewis statistic
@@ -1090,9 +1025,9 @@ We also can use the Raftery and Lewis statistic
 A traceplot of beta is below with a thin of 10 and the first 50% of samples excluded.
 
 ```{r beta-traceplot-CD4, fig.height=15}
-betaTrace(COMPASScovarV2Lum$beta, 
-          X = X,
-          gateNames = colnames(n_s)) 
+# betaTrace(COMPASScovarV2Lum$beta, 
+#           X = X,
+#           gateNames = colnames(n_s)) 
 ```
 
 ### Covariate-Flow Correlation and Estimated Effects
@@ -1148,29 +1083,29 @@ flow_freqDiffs(flow_agg) %>%
 
 ```{r hm, options}
 parentDirectory <- "~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/RV144/"
-COMPASSobj <- readRDS("~/CHSI/PackageDev/COMPASScovariate/incubator/Frances/Data/rv144COMPASSorig20_seed100_newcut.rds")$COMPASScovarobj
+COMPASSobj <- readRDS("/work/fwh6/RV144/Full/rv144Full1000_seed47.rds")$COMPASSobj
 
 
 # make sample ID rownames in meta
-rownames(COMPASSobj$data$meta) <- COMPASSobj$data$meta$PTID
+#rownames(COMPASSobj$data$meta) <- COMPASSobj$data$meta$PTID
 
-#--------------------------------------------------------
-# Original Heatmap
-#--------------------------------------------------------
-
-png(file=file.path(parentDirectory,"2-Output/RV144_orig.png"),
-    width=500, height = 550)
-
-origplot <- plot.COMPASSResult.ComplexHeatmap(COMPASSobj,
-                                  row_annotation = "flrstatus",
-                                  row_annotation_colors = list(
-                                    "Uninfected"=my_palette[11],
-                                    "Infected"=my_palette[12],
-                                    "Placebo" = my_palette[13]))
-
-draw(origplot)
-dev.off()
-
+# #--------------------------------------------------------
+# # Original Heatmap
+# #--------------------------------------------------------
+# 
+# png(file=file.path(parentDirectory,"2-Output/RV144_orig.png"),
+#     width=500, height = 550)
+# 
+# origplot <- plot.COMPASSResult.ComplexHeatmap(COMPASSobj,
+#                                   row_annotation = "flrstatus",
+#                                   row_annotation_colors = list(
+#                                     "Uninfected"=my_palette[11],
+#                                     "Infected"=my_palette[12],
+#                                     "Placebo" = my_palette[13]))
+# 
+# draw(origplot)
+# dev.off()
+# 
 #--------------------------------------------------------
 # Edits to COMPASScovarobj: fix in script later (TODO)
 #--------------------------------------------------------
@@ -1183,22 +1118,49 @@ rownames(covarTest$data$meta) <- covarTest$data$meta$PTID
 rownames(covarTest$fit$beta) <- colnames(covarTest$fit$mean_gamma)[1:(ncol(covarTest$fit$mean_gamma)-1)]
 # make beta covar colnames
 colnames(covarTest$fit$beta) <- c("Intercept", colnames(X))
+# 
+# my_palette <- pal_igv("default", alpha=0.7)(15)
+# 
+# 
+# png(file=file.path(parentDirectory,"2-Output/RV144_covar.png"),
+#     width=500, height = 550)
+# covarplot <- plot.COMPASSCovarResult.ComplexHeatmap(covarTest,
+#                                        covar_to_plot = "Luminex",
+#                                        row_annotation = "flrstatus",
+#                                   row_annotation_colors = list(
+#                                     "Uninfected"=my_palette[11],
+#                                     "Infected"=my_palette[12],
+#                                     "Placebo" = my_palette[13]))
+# 
+# draw(covarplot)
+#  dev.off()
+```
 
-my_palette <- pal_igv("default", alpha=0.7)(15)
 
+# PI 
 
-png(file=file.path(parentDirectory,"2-Output/RV144_covar.png"),
-    width=500, height = 550)
-covarplot <- plot.COMPASSCovarResult.ComplexHeatmap(covarTest,
-                                       covar_to_plot = "Luminex",
-                                       row_annotation = "flrstatus",
-                                  row_annotation_colors = list(
-                                    "Uninfected"=my_palette[11],
-                                    "Infected"=my_palette[12],
-                                    "Placebo" = my_palette[13]))
+We plot the PI calculated for the placebo vs. vaccinated patients and calculate the wilcoxon p-value for difference in PI between placebo and vaccinated. It looks like the PI matches the Supplementary Figure 2 in the original COMPASS paper.
 
-draw(covarplot)
- dev.off()
+```{r PI-plot, options}
+numCyt=6
+q=1
+
+PI.percMat <- Percent.Matrix(COMPASSobj$data$n_s, 6)
+fullPI <- apply(Percent.Matrix(COMPASSobj$data$n_s, 6), 
+                1, function(row) PI.Score(row, numCyt, q))
+
+PIDF <- data.frame(PTID=rownames(COMPASSobj$data$n_s), PI=fullPI) %>%
+  left_join(COMPASSobj$data$meta %>% select(infect, vaccine, PTID))
+  
+PIDF %>%
+  ggplot(aes(x=vaccine, y=PI)) + geom_boxplot() + geom_point()
+
+PIDF %>%
+  ggplot(aes(x=infect, y=PI)) + geom_boxplot() + geom_point()
+
+# p-value=0.45 
+wilcox.test(PIDF %>% filter(infect=="NON-INFECTED") %>% .$PI, PIDF %>% filter(infect=="INFECTED") %>% .$PI)
+
 ```
 
 # PFS/FS Cox Models 
@@ -1210,33 +1172,14 @@ We get two sets of PFS scores:
 -   RV144 COMPASS original
 -   RV144 COMPASS covariate
 
-### PFS Scores
+### PFS Scores 
 
 ```{r}
-PolyfunctionalityScore <- function(x, degree, n,percBurn=0.5) {
-  
-  xmeanGam <- mean_gam(x$gamma, percBurn) %>%
-  `colnames<-`(colnames(x$mean_gamma))
-  
-  degree <- x$categories[, "Counts"]
-  n <- ncol(x$categories) - 1
-  y <- xmeanGam
-  pfs = apply(y, 1, function(row) {
-    ## (2 / (n+1)) is a factor that normalized the score between 0 and 1
-    sum(row * degree / choose(n, degree)) / n * (2 / (n + 1))
-  })
-  return(pfs)
-}
 
+PFSOrig <- PolyfunctionalityScore(COMPASSobj) %>% as.matrix()
+COMPASScovarV2Lumtest <-COVtoCOMPASSObj(list(COMPASScovarobj=COMPASScovarV2Lum), COMPASSobj, X)
+PFSCovar <- PolyfunctionalityScore.COMPASSResult(COMPASScovarV2Lumtest) %>% as.data.frame()
 
-PFSOrig <- PolyfunctionalityScore(COMPASSorig)
-PFSCovar <- PolyfunctionalityScore(COMPASScovarV2Lum) %>% as.data.frame()
-
-# OrigCompareDF <- cbind(PFSOrig, PFSOrig2) %>%
-#   `colnames<-`(c("PFSRV144", "PFSRV144covar")) %>%
-#   rownames_to_column(var="PTID") %>%
-# # joining with demographic information
-#   inner_join(meta_unfiltered) 
 
 RV144PFS_DF <- 
 # bind PFS scores into a dataframe
@@ -1245,6 +1188,12 @@ RV144PFS_DF <-
   rownames_to_column(var="PTID") %>%
 # joining with demographic information
   inner_join(meta) 
+
+wilcox.test(RV144PFS_DF %>% filter(infect=="INFECTED") %>% .$PFSRV144,
+            RV144PFS_DF %>% filter(infect=="NON-INFECTED")%>% .$PFSRV144)
+
+wilcox.test(RV144PFS_DF %>% filter(infect=="INFECTED") %>% .$PFSRV144covar,
+            RV144PFS_DF %>% filter(infect=="NON-INFECTED") %>% .$PFSRV144covar)
 ```
 
 We plot these polyfunctionality scores by infection status.
@@ -1283,6 +1232,17 @@ df %>%
 
 PFSplot(RV144PFS_DF)
 PFSscatterplot(RV144PFS_DF)
+
+RV144PFS_DF %>%
+  select(PTID, PFSRV144, PFSRV144covar, vaccine) %>%
+  pivot_longer(cols = -c(PTID, vaccine), names_to = "Type", values_to = "Value") %>%
+  ggplot(aes(x=Type, y = Value, color = vaccine)) + geom_boxplot(outlier.shape = NA) + geom_point(position = position_jitterdodge(0.05, seed = 47)) +
+  ylab("Polyfunctional Score")
+
+wilcox.test(RV144PFS_DF %>% filter(infect=="INFECTED") %>% .$PFSRV144,
+            RV144PFS_DF %>% filter(infect=="NON-INFECTED") %>% .$PFSRV144)
+
+
 ```
 
 
@@ -1385,8 +1345,44 @@ df %>%
 
 FSplot(FSRV144_DF)
 FSscatterplot(FSRV144_DF)
+
+FSRV144_DF %>%
+  select(PTID,  FSRV144, FSRV144covar, vaccine) %>%
+  pivot_longer(cols = -c(PTID, vaccine), names_to = "Type", values_to = "Value") %>%
+  ggplot(aes(x=Type, y = Value, color = vaccine)) + geom_boxplot(outlier.shape = NA) + geom_point(position = position_jitterdodge(0.1, seed = 47)) +
+  ylab("Functional Score")
+
+wilcox.test(FSRV144_DF %>% filter(infect=="INFECTED") %>% .$FSRV144,
+            FSRV144_DF %>% filter(infect=="NON-INFECTED") %>% .$FSRV144)
+
+wilcox.test(FSRV144_DF %>% filter(infect=="INFECTED") %>% .$FSRV144covar,
+            FSRV144_DF %>% filter(infect=="NON-INFECTED") %>% .$FSRV144covar)
 ```
 
+### Comparing to the original object
+
+The scores here look correct. Is there variation due to the 
+
+```{r orig-PFS, options}
+PFSOG<- PolyfunctionalityScore(rv144) %>% as.matrix()
+FSOG <- FunctionalityScore.COMPASSResult(rv144) %>% as.matrix()
+
+OGscoreDF <- data.frame(PTID=rownames(PFSOG), 
+                        PFS=PFSOG[,1],
+                        FS = FSOG[,1]) %>%
+  left_join(rv144$data$meta %>% select(flrstatus, PTID, infect, vaccine))
+  
+OGscoreDF %>%
+  ggplot(aes(x=vaccine, y=PFS)) + geom_boxplot() + geom_jitter()
+
+# p=0.0112
+wilcox.test(OGscoreDF %>% filter(infect=="INFECTED") %>% .$PFS,
+            OGscoreDF %>% filter(infect=="NON-INFECTED")%>% .$PFS)
+
+# p=0.0298
+wilcox.test(OGscoreDF %>% filter(infect=="INFECTED") %>% .$FS,
+            OGscoreDF %>% filter(infect=="NON-INFECTED")%>% .$FS)
+```
 
 # Rdata Save
 
