@@ -41,17 +41,7 @@ options(knitr.duplicate.label = 'allow')
 
 # Author: Frances Hung
 
-#
-
-# Program: //duhs-vclin-nc1/dusom_biostats_fs/Data/biostatscore/
-
-#             CRU/Immunology Center/
-
-#             Palmer/
-
-#             COMPASS-covar/compass-covariate/incubator/
-
-#             Rep-5-COMPASScovarAim2.RMD
+# Program: Rep-RV144.Rmd
 
 #
 
